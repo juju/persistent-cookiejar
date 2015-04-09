@@ -62,6 +62,10 @@ type Options struct {
 
 // Jar implements the http.CookieJar interface from the net/http package.
 type Jar struct {
+	// filename holds the file that the cookies were
+	// last loaded from.
+	filename string
+
 	psList PublicSuffixList
 
 	// mu locks the remaining fields.
@@ -96,7 +100,7 @@ func New(o *Options) (*Jar, error) {
 // should be preserved.
 type entry struct {
 	Name       string
-	Value      string	
+	Value      string
 	Domain     string
 	Path       string
 	Secure     bool

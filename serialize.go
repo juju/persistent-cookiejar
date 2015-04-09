@@ -3,17 +3,28 @@
 // license that can be found in the LICENSE file.
 
 package cookiejar
+
 import (
+	"encoding/json"
+	"errors"
 	"io"
 	"os"
-	"encoding/json"
 )
 
-// SaveToFile is a convenience function that
-// saves the cookies in j to a file at the given path
-// using j.WriteTo.
-func SaveToFile(j *Jar, path string) error {
-	f, err := os.Create(path)
+// Save uses j.WriteTo to save the cookies in j to a file at the path
+// they were loaded from with Load.
+//
+// It returns an error if Load was not called.
+func (j *Jar) Save() error {
+	if j.filename == "" {
+		return errors.New("save called on non-loaded cookie jar")
+	}
+	// TODO this is too simplistic - if there is another client
+	// that is also saving cookies, those cookies may be overwritten.
+	// To do it properly, we probably need a file lock, read
+	// the cookie file, merge any cookies that have been saved there
+	// and then write it.
+	f, err := os.Create(j.filename)
 	if err != nil {
 		return err
 	}
@@ -21,12 +32,15 @@ func SaveToFile(j *Jar, path string) error {
 	return j.WriteTo(f)
 }
 
-// LoadFromFile is a convenvience method that
-// loads cookies from the file with the given name.
-// using j.ReadFrom. If the file does not exist,
+// Load uses j.ReadFrom to read cookies
+// from the file at the given path. If the file does not exist,
 // no error will be returned and no cookies
 // will be loaded.
-func LoadFromFile(j *Jar, path string) error {
+//
+// The path will be stored in the jar and
+// used when j.Save is next called.
+func (j *Jar) Load(path string) error {
+	j.filename = path
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
