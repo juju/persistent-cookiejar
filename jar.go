@@ -6,7 +6,7 @@
 //
 // This implementation is a fork of net/http/cookiejar which also
 // implements methods for dumping the cookies to persistent
-// and retrieving them.
+// storage and retrieving them.
 package cookiejar
 
 import (
