@@ -9,23 +9,6 @@ methods for dumping the cookies to persistent and retrieving them.
 
 ## Usage
 
-#### func  LoadFromFile
-
-```go
-func LoadFromFile(j *Jar, path string) error
-```
-LoadFromFile is a convenvience method that loads cookies from the file with the
-given name. using j.ReadFrom. If the file does not exist, no error will be
-returned and no cookies will be loaded.
-
-#### func  SaveToFile
-
-```go
-func SaveToFile(j *Jar, path string) error
-```
-SaveToFile is a convenience function that saves the cookies in j to a file at
-the given path using j.WriteTo.
-
 #### type Jar
 
 ```go
@@ -51,12 +34,35 @@ Cookies implements the Cookies method of the http.CookieJar interface.
 
 It returns an empty slice if the URL's scheme is not HTTP or HTTPS.
 
+#### func (*Jar) Load
+
+```go
+func (j *Jar) Load(path string) error
+```
+Load uses j.ReadFrom to read cookies from the file at the given path. If the
+file does not exist, no error will be returned and no cookies will be loaded.
+
+The path will be stored in the jar and used when j.Save is next called.
+
 #### func (*Jar) ReadFrom
 
 ```go
 func (j *Jar) ReadFrom(r io.Reader) error
 ```
 ReadFrom reads all the cookies from r and stores them in the Jar.
+
+#### func (*Jar) Save
+
+```go
+func (j *Jar) Save() error
+```
+Save uses j.WriteTo to save the cookies in j to a file at the path they were
+loaded from with Load. Note that there is no locking of the file, so concurrent
+calls to Save and Load can yield corrupted or missing cookies.
+
+It returns an error if Load was not called.
+
+TODO(rog) implement decent semantics for concurrent use.
 
 #### func (*Jar) SetCookies
 

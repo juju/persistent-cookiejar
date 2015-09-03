@@ -12,9 +12,13 @@ import (
 )
 
 // Save uses j.WriteTo to save the cookies in j to a file at the path
-// they were loaded from with Load.
+// they were loaded from with Load. Note that there is no locking
+// of the file, so concurrent calls to Save and Load can yield
+// corrupted or missing cookies.
 //
 // It returns an error if Load was not called.
+//
+// TODO(rog) implement decent semantics for concurrent use.
 func (j *Jar) Save() error {
 	if j.filename == "" {
 		return errors.New("save called on non-loaded cookie jar")
