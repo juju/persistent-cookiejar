@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -70,6 +71,9 @@ type Jar struct {
 
 	// mu locks the remaining fields.
 	mu sync.Mutex
+
+	// flock locks writing to disk
+	flock *os.File
 
 	// entries is a set of entries, keyed by their eTLD+1 and subkeyed by
 	// their name/domain/path.
