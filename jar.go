@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -68,23 +69,29 @@ type Jar struct {
 
 	psList PublicSuffixList
 
+	// id is a global identifier that is used to prevent
+	// potential deadlocks when locking multiple Jars
+	// at once.
+	id uint64
+
 	// mu locks the remaining fields.
 	mu sync.Mutex
 
 	// entries is a set of entries, keyed by their eTLD+1 and subkeyed by
 	// their name/domain/path.
 	entries map[string]map[string]entry
-
-	// nextSeqNum is the next sequence number assigned to a new cookie
-	// created SetCookies.
-	nextSeqNum uint64
 }
+
+// nextJarId holds the atomically incremented global jar id,
+// used for avoiding deadlocks.
+var nextJarId uint64
 
 // New returns a new cookie jar. A nil *Options is equivalent to a zero
 // Options.
 func New(o *Options) (*Jar, error) {
 	jar := &Jar{
 		entries: make(map[string]map[string]entry),
+		id:      atomic.AddUint64(&nextJarId, 1),
 	}
 	if o != nil {
 		jar.psList = o.PublicSuffixList
@@ -111,10 +118,10 @@ type entry struct {
 	Creation   time.Time
 	LastAccess time.Time
 
-	// SeqNum is a sequence number so that Cookies returns cookies in a
-	// deterministic order, even for cookies that have equal Path length and
-	// equal Creation time. This simplifies testing.
-	SeqNum uint64
+	// Updated records when the cookie was updated.
+	// This is different from creation time because a cookie
+	// can be changed without updating the creation time.
+	Updated time.Time
 }
 
 // Id returns the domain;path;name triple of e as an id.
@@ -164,13 +171,20 @@ type byPathLength []entry
 func (s byPathLength) Len() int { return len(s) }
 
 func (s byPathLength) Less(i, j int) bool {
-	if len(s[i].Path) != len(s[j].Path) {
-		return len(s[i].Path) > len(s[j].Path)
+	e0, e1 := &s[i], &s[j]
+	if len(e0.Path) != len(e1.Path) {
+		return len(e0.Path) > len(e1.Path)
 	}
-	if !s[i].Creation.Equal(s[j].Creation) {
-		return s[i].Creation.Before(s[j].Creation)
+	if !e0.Creation.Equal(e1.Creation) {
+		return e0.Creation.Before(e1.Creation)
 	}
-	return s[i].SeqNum < s[j].SeqNum
+	// The following are not strictly necessary
+	// but are useful for providing deterministic
+	// behaviour in tests.
+	if e0.Name != e1.Name {
+		return e0.Name < e1.Name
+	}
+	return e0.Value < e1.Value
 }
 
 func (s byPathLength) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
@@ -207,12 +221,17 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 		path = "/"
 	}
 
-	modified := false
 	var selected []entry
 	for id, e := range submap {
-		if e.Persistent && !e.Expires.After(now) {
-			delete(submap, id)
-			modified = true
+		if !e.Expires.After(now) {
+			// Save some space by deleting the value when the cookie
+			// expires. We can't delete the cookie itself because then
+			// we wouldn't know that the cookie had expired when
+			// we merge with another cookie jar.
+			if e.Value != "" {
+				e.Value = ""
+				submap[id] = e
+			}
 			continue
 		}
 		if !e.shouldSend(https, host, path) {
@@ -221,14 +240,6 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 		e.LastAccess = now
 		submap[id] = e
 		selected = append(selected, e)
-		modified = true
-	}
-	if modified {
-		if len(submap) == 0 {
-			delete(j.entries, key)
-		} else {
-			j.entries[key] = submap
-		}
 	}
 
 	sort.Sort(byPathLength(selected))
@@ -237,6 +248,67 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 	}
 
 	return cookies
+}
+
+var expiryRemovalDuration = 24 * time.Hour
+
+// Merge merges all the cookies in j1 into j0.
+// More recently changed cookies take precedence
+// over older ones.
+//
+func (j0 *Jar) Merge(j1 *Jar) {
+	j0.merge(j1, time.Now())
+}
+
+// merge is like Merge but takes the current time as
+// parameter.
+func (j0 *Jar) merge(j1 *Jar, now time.Time) {
+	if j0 == j1 {
+		return
+	}
+	// Lock the two cookie jars in a predictable sequence
+	// so we cannot deadlock if someone concurrently
+	// merges from j1 to j0 and j0 to j1.
+	if j1.id > j0.id {
+		j0.mu.Lock()
+		defer j0.mu.Unlock()
+		j1.mu.Lock()
+		defer j1.mu.Unlock()
+	} else {
+		j1.mu.Lock()
+		defer j1.mu.Unlock()
+		j0.mu.Lock()
+		defer j0.mu.Unlock()
+	}
+	for tld, submap := range j1.entries {
+		submap0 := j0.entries[tld]
+		if submap0 == nil {
+			submap0 = make(map[string]entry)
+			j0.entries[tld] = submap0
+		}
+		for id, e1 := range submap {
+			if e0, ok := submap0[id]; !ok || e1.Updated.After(e0.Updated) {
+				submap0[id] = e1
+			}
+		}
+	}
+	j0.deleteExpired(now)
+}
+
+// deleteExpired deletes all entries that have expired for long enough
+// that we can actually expect there to be no external copies of it that
+// might resurrect the dead cookie.
+func (j *Jar) deleteExpired(now time.Time) {
+	for tld, submap := range j.entries {
+		for id, e := range submap {
+			if !e.Expires.After(now) && !e.Updated.Add(expiryRemovalDuration).After(now) {
+				delete(submap, id)
+			}
+		}
+		if len(submap) == 0 {
+			delete(j.entries, tld)
+		}
+	}
 }
 
 // SetCookies implements the SetCookies method of the http.CookieJar interface.
@@ -252,6 +324,8 @@ func (j *Jar) setCookies(u *url.URL, cookies []*http.Cookie, now time.Time) {
 		return
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
+		// TODO is this really correct? It might be nice to send
+		// cookies to websocket connections, for example.
 		return
 	}
 	host, err := canonicalHost(u.Host)
@@ -265,46 +339,24 @@ func (j *Jar) setCookies(u *url.URL, cookies []*http.Cookie, now time.Time) {
 	defer j.mu.Unlock()
 
 	submap := j.entries[key]
-
-	modified := false
 	for _, cookie := range cookies {
-		e, remove, err := j.newEntry(cookie, now, defPath, host)
+		e, err := j.newEntry(cookie, now, defPath, host)
 		if err != nil {
 			continue
 		}
 		id := e.id()
-		if remove {
-			if submap != nil {
-				if _, ok := submap[id]; ok {
-					delete(submap, id)
-					modified = true
-				}
-			}
-			continue
-		}
 		if submap == nil {
 			submap = make(map[string]entry)
-		}
-
-		if old, ok := submap[id]; ok {
-			e.Creation = old.Creation
-			e.SeqNum = old.SeqNum
-		} else {
-			e.Creation = now
-			e.SeqNum = j.nextSeqNum
-			j.nextSeqNum++
-		}
-		e.LastAccess = now
-		submap[id] = e
-		modified = true
-	}
-
-	if modified {
-		if len(submap) == 0 {
-			delete(j.entries, key)
-		} else {
 			j.entries[key] = submap
 		}
+		if old, ok := submap[id]; ok {
+			e.Creation = old.Creation
+		} else {
+			e.Creation = now
+		}
+		e.Updated = now
+		e.LastAccess = now
+		submap[id] = e
 	}
 }
 
@@ -386,18 +438,18 @@ func defaultPath(path string) string {
 	return path[:i] // Path is either of form "/abc/xyz" or "/abc/xyz/".
 }
 
-// newEntry creates an entry from a http.Cookie c. now is the current time and
-// is compared to c.Expires to determine deletion of c. defPath and host are the
-// default-path and the canonical host name of the URL c was received from.
+// newEntry creates an entry from a http.Cookie c. now is the current
+// time and is compared to c.Expires to determine deletion of c. defPath
+// and host are the default-path and the canonical host name of the URL
+// c was received from.
 //
-// remove records whether the jar should delete this cookie, as it has already
-// expired with respect to now. In this case, e may be incomplete, but it will
-// be valid to call e.id (which depends on e's Name, Domain and Path).
+// The returned entry should be removed if its expiry time is in the
+// past. In this case, e may be incomplete, but it will be valid to call
+// e.id (which depends on e's Name, Domain and Path).
 //
 // A malformed c.Domain will result in an error.
-func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e entry, remove bool, err error) {
+func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e entry, err error) {
 	e.Name = c.Name
-
 	if c.Path == "" || c.Path[0] != '/' {
 		e.Path = defPath
 	} else {
@@ -406,33 +458,31 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 
 	e.Domain, e.HostOnly, err = j.domainAndType(host, c.Domain)
 	if err != nil {
-		return e, false, err
+		return e, err
 	}
 
 	// MaxAge takes precedence over Expires.
 	if c.MaxAge < 0 {
-		return e, true, nil
+		return e, nil
 	} else if c.MaxAge > 0 {
 		e.Expires = now.Add(time.Duration(c.MaxAge) * time.Second)
 		e.Persistent = true
+	} else if c.Expires.IsZero() {
+		e.Expires = endOfTime
+		e.Persistent = false
 	} else {
-		if c.Expires.IsZero() {
-			e.Expires = endOfTime
-			e.Persistent = false
-		} else {
-			if !c.Expires.After(now) {
-				return e, true, nil
-			}
-			e.Expires = c.Expires
-			e.Persistent = true
+		if !c.Expires.After(now) {
+			return e, nil
 		}
+		e.Expires = c.Expires
+		e.Persistent = true
 	}
 
 	e.Value = c.Value
 	e.Secure = c.Secure
 	e.HttpOnly = c.HttpOnly
 
-	return e, false, nil
+	return e, nil
 }
 
 var (
