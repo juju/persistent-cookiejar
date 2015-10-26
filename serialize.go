@@ -9,75 +9,137 @@ import (
 	"errors"
 	"io"
 	"os"
+	"time"
 )
 
-// Save uses j.WriteTo to save the cookies in j to a file at the path
-// they were loaded from with Load. Note that there is no locking
-// of the file, so concurrent calls to Save and Load can yield
-// corrupted or missing cookies.
-//
-// It returns an error if Load was not called.
-//
-// TODO(rog) implement decent semantics for concurrent use.
+// TODO:XXX: Redoc
 func (j *Jar) Save() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	if j.filename == "" {
 		return errors.New("save called on non-loaded cookie jar")
 	}
-	// TODO this is too simplistic - if there is another client
-	// that is also saving cookies, those cookies may be overwritten.
-	// To do it properly, we probably need a file lock, read
-	// the cookie file, merge any cookies that have been saved there
-	// and then write it.
-	f, err := os.Create(j.filename)
-	if err != nil {
+	if err := j.lock(); err != nil {
 		return err
 	}
-	defer f.Close()
-	return j.WriteTo(f)
+	f, err := os.OpenFile(j.filename, os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		j.unlock()
+		return err
+	}
+	oldEntries := make(map[string]map[string]entry)
+	err = readJSON(f, oldEntries)
+	if err != nil && err != io.EOF {
+		j.unlock()
+		return err
+	}
+	// There was JSON parsed, merge overwriting found entries.
+	if err != io.EOF {
+		if err := f.Truncate(0); err != nil {
+			j.unlock()
+			return err
+		}
+		mergeEntries(oldEntries, j.entries)
+		j.entries = oldEntries
+	}
+	err = writeJSON(f, j.entries)
+	if errClose := f.Close(); err == nil {
+		err = errClose
+	}
+	if errUnlock := j.unlock(); err == nil {
+		err = errUnlock
+	}
+	return err
 }
 
-// Load uses j.ReadFrom to read cookies
-// from the file at the given path. If the file does not exist,
-// no error will be returned and no cookies
-// will be loaded.
-//
-// The path will be stored in the jar and
-// used when j.Save is next called.
+// TODO:XXX: Redoc
 func (j *Jar) Load(path string) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
 	j.filename = path
+	if err := j.lock(); err != nil {
+		return err
+	}
 	f, err := os.Open(path)
 	if err != nil {
+		errUnlock := j.unlock()
 		if os.IsNotExist(err) {
-			return nil
+			err = errUnlock
 		}
 		return err
 	}
-	defer f.Close()
-	return j.ReadFrom(f)
+	err = readJSON(f, j.entries)
+	if errClose := f.Close(); err == nil {
+		err = errClose
+	}
+	if errUnlock := j.unlock(); err == nil {
+		err = errUnlock
+	}
+	return err
 }
 
 // WriteTo writes all the cookies in the jar to w
 // as a JSON object.
 func (j *Jar) WriteTo(w io.Writer) error {
-	// TODO don't store non-persistent cookies.
-	encoder := json.NewEncoder(w)
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if err := encoder.Encode(j.entries); err != nil {
-		return err
-	}
-	return nil
+	return writeJSON(w, j.entries)
+}
+
+// TODO:XXX: Doc
+func writeJSON(w io.Writer, m map[string]map[string]entry) error {
+	// TODO don't store non-persistent cookies.
+	encoder := json.NewEncoder(w)
+	return encoder.Encode(m)
 }
 
 // ReadFrom reads all the cookies from r
 // and stores them in the Jar.
 func (j *Jar) ReadFrom(r io.Reader) error {
-	// TODO verification and expiry on read.
-	decoder := json.NewDecoder(r)
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if err := decoder.Decode(&j.entries); err != nil {
+	return readJSON(r, j.entries)
+}
+
+// TODO:XXX: Doc
+func readJSON(r io.Reader, m map[string]map[string]entry) error {
+	// TODO verification and expiry on read.
+	decoder := json.NewDecoder(r)
+	return decoder.Decode(&m)
+}
+
+// TODO:XXX: Doc
+func (j *Jar) lock() error {
+	var err error
+	// Spin until lock is acquired.
+	for {
+		j.flock, err = os.OpenFile(j.filename+".lock", os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
+		if err == os.ErrExist {
+			time.Sleep(1 * time.Microsecond)
+			continue
+		}
 		return err
 	}
-	return nil
+}
+
+// TODO:XXX: Doc
+func (j *Jar) unlock() error {
+	name := j.flock.Name()
+	err := j.flock.Close()
+	if errRemove := os.Remove(name); err == nil {
+		err = errRemove
+	}
+	return err
+}
+
+// TODO:XXX: Doc
+func mergeEntries(dest, src map[string]map[string]entry) {
+	for k0 := range src {
+		if _, ok := src[k0]; !ok {
+			dest[k0] = make(map[string]entry)
+		}
+		for k1 := range src[k0] {
+			dest[k0][k1] = src[k0][k1]
+		}
+	}
 }
