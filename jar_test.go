@@ -1588,19 +1588,19 @@ func TestLoadDifferentPublicSuffixList(t *testing.T) {
 }
 
 func TestLockFile(t *testing.T) {
-	f, err := ioutil.TempFile("", "cookiejar-test")
+	d, err := ioutil.TempDir("", "cookiejar_test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
-	defer os.Remove(f.Name())
+	defer os.RemoveAll(d)
+	filename := filepath.Join(d, "lockfile")
 	concurrentCount := int64(0)
 	var wg sync.WaitGroup
 	locker := func() {
 		defer wg.Done()
-		closer, err := lockFile(f.Name())
+		closer, err := lockFile(filename)
 		if err != nil {
-			t.Errorf("cannot obtain lock")
+			t.Errorf("cannot obtain lock: %v", err)
 			return
 		}
 		x := atomic.AddInt64(&concurrentCount, 1)
