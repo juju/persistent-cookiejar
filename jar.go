@@ -15,11 +15,17 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
+
+	"gopkg.in/errgo.v1"
+
+	"golang.org/x/net/publicsuffix"
 )
 
 // PublicSuffixList provides the public suffix of a domain. For example:
@@ -55,24 +61,21 @@ type Options struct {
 	// PublicSuffixList is the public suffix list that determines whether
 	// an HTTP server can set a cookie for a domain.
 	//
-	// A nil value is valid and may be useful for testing but it is not
-	// secure: it means that the HTTP server for foo.co.uk can set a cookie
-	// for bar.co.uk.
+	// If this is nil, the public suffix list implementation in golang.org/x/net/publicsuffix
+	// is used.
 	PublicSuffixList PublicSuffixList
+
+	// Filename holds the file to use for storage of the cookies.
+	// If it is empty, the value of DefaultCookieFile will be used.
+	Filename string
 }
 
 // Jar implements the http.CookieJar interface from the net/http package.
 type Jar struct {
-	// filename holds the file that the cookies were
-	// last loaded from.
+	// filename holds the file that the cookies were loaded from.
 	filename string
 
 	psList PublicSuffixList
-
-	// id is a global identifier that is used to prevent
-	// potential deadlocks when locking multiple Jars
-	// at once.
-	id uint64
 
 	// mu locks the remaining fields.
 	mu sync.Mutex
@@ -82,21 +85,44 @@ type Jar struct {
 	entries map[string]map[string]entry
 }
 
-// nextJarId holds the atomically incremented global jar id,
-// used for avoiding deadlocks.
-var nextJarId uint64
+var noOptions Options
 
 // New returns a new cookie jar. A nil *Options is equivalent to a zero
 // Options.
+//
+// New will return an error if the cookies could not be loaded
+// from the file for any reason than if the file does not exist.
 func New(o *Options) (*Jar, error) {
+	return newAtTime(o, time.Now())
+}
+
+// newAtTime is like New but takes the current time as a parameter.
+func newAtTime(o *Options, now time.Time) (*Jar, error) {
 	jar := &Jar{
 		entries: make(map[string]map[string]entry),
-		id:      atomic.AddUint64(&nextJarId, 1),
 	}
-	if o != nil {
-		jar.psList = o.PublicSuffixList
+	if o == nil {
+		o = &noOptions
 	}
+	if jar.psList = o.PublicSuffixList; jar.psList == nil {
+		jar.psList = publicsuffix.List
+	}
+	if jar.filename = o.Filename; jar.filename == "" {
+		jar.filename = DefaultCookieFile()
+	}
+	if err := jar.load(); err != nil {
+		return nil, errgo.Notef(err, "cannot load cookies")
+	}
+	jar.deleteExpired(now)
 	return jar, nil
+}
+
+// homeDir returns the OS-specific home path as specified in the environment.
+func homeDir() string {
+	if runtime.GOOS == "windows" {
+		return filepath.Join(os.Getenv("HOMEDRIVE"), os.Getenv("HOMEPATH"))
+	}
+	return os.Getenv("HOME")
 }
 
 // entry is the internal representation of a cookie.
@@ -122,6 +148,13 @@ type entry struct {
 	// This is different from creation time because a cookie
 	// can be changed without updating the creation time.
 	Updated time.Time
+
+	// CanonicalHost stores the original canonical host name
+	// that the cookie was associated with. We store this
+	// so that even if the public suffix list changes (for example
+	// when storing/loading cookies) we can still get the correct
+	// jar keys.
+	CanonicalHost string
 }
 
 // Id returns the domain;path;name triple of e as an id.
@@ -162,6 +195,18 @@ func (e *entry) pathMatch(requestPath string) bool {
 // hasDotSuffix reports whether s ends in "."+suffix.
 func hasDotSuffix(s, suffix string) bool {
 	return len(s) > len(suffix) && s[len(s)-len(suffix)-1] == '.' && s[len(s)-len(suffix):] == suffix
+}
+
+type byCanonicalHost struct {
+	byPathLength
+}
+
+func (s byCanonicalHost) Less(i, j int) bool {
+	e0, e1 := &s.byPathLength[i], &s.byPathLength[j]
+	if e0.CanonicalHost != e1.CanonicalHost {
+		return e0.CanonicalHost < e1.CanonicalHost
+	}
+	return s.byPathLength.Less(i, j)
 }
 
 // byPathLength is a []entry sort.Interface that sorts according to RFC 6265
@@ -250,50 +295,30 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 	return cookies
 }
 
-var expiryRemovalDuration = 24 * time.Hour
-
-// Merge merges all the cookies in j1 into j0.
-// More recently changed cookies take precedence
-// over older ones.
-//
-func (j0 *Jar) Merge(j1 *Jar) {
-	j0.merge(j1, time.Now())
-}
-
-// merge is like Merge but takes the current time as
-// parameter.
-func (j0 *Jar) merge(j1 *Jar, now time.Time) {
-	if j0 == j1 {
-		return
-	}
-	// Lock the two cookie jars in a predictable sequence
-	// so we cannot deadlock if someone concurrently
-	// merges from j1 to j0 and j0 to j1.
-	if j1.id > j0.id {
-		j0.mu.Lock()
-		defer j0.mu.Unlock()
-		j1.mu.Lock()
-		defer j1.mu.Unlock()
-	} else {
-		j1.mu.Lock()
-		defer j1.mu.Unlock()
-		j0.mu.Lock()
-		defer j0.mu.Unlock()
-	}
-	for tld, submap := range j1.entries {
-		submap0 := j0.entries[tld]
-		if submap0 == nil {
-			submap0 = make(map[string]entry)
-			j0.entries[tld] = submap0
+// merge merges all the given entries into j. More recently changed
+// cookies take precedence over older ones.
+func (j *Jar) merge(entries []entry) {
+	for _, e := range entries {
+		if e.CanonicalHost == "" {
+			continue
 		}
-		for id, e1 := range submap {
-			if e0, ok := submap0[id]; !ok || e1.Updated.After(e0.Updated) {
-				submap0[id] = e1
+		key := jarKey(e.CanonicalHost, j.psList)
+		id := e.id()
+		submap := j.entries[key]
+		if submap == nil {
+			j.entries[key] = map[string]entry{
+				id: e,
 			}
+			continue
+		}
+		oldEntry, ok := submap[id]
+		if !ok || e.Updated.After(oldEntry.Updated) {
+			submap[id] = e
 		}
 	}
-	j0.deleteExpired(now)
 }
+
+var expiryRemovalDuration = 24 * time.Hour
 
 // deleteExpired deletes all entries that have expired for long enough
 // that we can actually expect there to be no external copies of it that
@@ -344,6 +369,7 @@ func (j *Jar) setCookies(u *url.URL, cookies []*http.Cookie, now time.Time) {
 		if err != nil {
 			continue
 		}
+		e.CanonicalHost = host
 		id := e.id()
 		if submap == nil {
 			submap = make(map[string]entry)
@@ -460,22 +486,21 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 	if err != nil {
 		return e, err
 	}
-
 	// MaxAge takes precedence over Expires.
-	if c.MaxAge < 0 {
-		return e, nil
-	} else if c.MaxAge > 0 {
-		e.Expires = now.Add(time.Duration(c.MaxAge) * time.Second)
+	if c.MaxAge != 0 {
 		e.Persistent = true
+		e.Expires = now.Add(time.Duration(c.MaxAge) * time.Second)
+		if c.MaxAge < 0 {
+			return e, nil
+		}
 	} else if c.Expires.IsZero() {
 		e.Expires = endOfTime
-		e.Persistent = false
 	} else {
+		e.Persistent = true
+		e.Expires = c.Expires
 		if !c.Expires.After(now) {
 			return e, nil
 		}
-		e.Expires = c.Expires
-		e.Persistent = true
 	}
 
 	e.Value = c.Value
@@ -554,4 +579,16 @@ func (j *Jar) domainAndType(host, domain string) (string, bool, error) {
 	}
 
 	return domain, false, nil
+}
+
+// DefaultCookieFile returns the default cookie file to use
+// for persisting cookie data.
+// The following names will be used in decending order of preference:
+//	- the value of the $GOCOOKIES environment variable.
+//	- $HOME/.go-cookies
+func DefaultCookieFile() string {
+	if f := os.Getenv("GOCOOKIES"); f != "" {
+		return f
+	}
+	return filepath.Join(homeDir(), ".go-cookies")
 }

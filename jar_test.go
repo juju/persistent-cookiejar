@@ -6,14 +6,22 @@ package cookiejar
 
 import (
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// nonExistentFile holds a large random number that is vanishingly unlikely to exist for real.
+var nonExistentFile = "98818e574592c54bf1ec90174e72e33081a0f8324c6e6302fa94ff389e6b7fc8"
 
 // tNow is the synthetic current time used as now during testing.
 var tNow = time.Date(2013, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -32,9 +40,26 @@ func (testPSL) PublicSuffix(d string) string {
 	return d[strings.LastIndex(d, ".")+1:]
 }
 
+// emptyPSL implements PublicSuffixList with just the default
+// rule "*".
+type emptyPSL struct{}
+
+func (emptyPSL) String() string {
+	return "emptyPSL"
+}
+func (emptyPSL) PublicSuffix(d string) string {
+	return d[strings.LastIndex(d, ".")+1:]
+}
+
 // newTestJar creates an empty Jar with testPSL as the public suffix list.
-func newTestJar() *Jar {
-	jar, err := New(&Options{PublicSuffixList: testPSL{}})
+func newTestJar(path string) *Jar {
+	if path == "" {
+		path = nonExistentFile
+	}
+	jar, err := New(&Options{
+		PublicSuffixList: testPSL{},
+		Filename:         path,
+	})
 	if err != nil {
 		panic(err)
 	}
@@ -284,7 +309,7 @@ var domainAndTypeTests = [...]struct {
 }
 
 func TestDomainAndType(t *testing.T) {
-	jar := newTestJar()
+	jar := newTestJar("")
 	for _, tc := range domainAndTypeTests {
 		domain, hostOnly, err := jar.domainAndType(tc.host, tc.domain)
 		if err != tc.wantErr {
@@ -496,7 +521,7 @@ var basicsTests = [...]jarTest{
 
 func TestBasics(t *testing.T) {
 	for _, test := range basicsTests {
-		jar := newTestJar()
+		jar := newTestJar("")
 		test.run(t, jar)
 	}
 }
@@ -644,14 +669,14 @@ var updateAndDeleteTests = [...]jarTest{
 }
 
 func TestUpdateAndDelete(t *testing.T) {
-	jar := newTestJar()
+	jar := newTestJar("")
 	for _, test := range updateAndDeleteTests {
 		test.run(t, jar)
 	}
 }
 
 func TestExpiration(t *testing.T) {
-	jar := newTestJar()
+	jar := newTestJar("")
 	jarTest{
 		"Expiration.",
 		"http://www.host.test",
@@ -879,7 +904,7 @@ var chromiumBasicsTests = [...]jarTest{
 
 func TestChromiumBasics(t *testing.T) {
 	for _, test := range chromiumBasicsTests {
-		jar := newTestJar()
+		jar := newTestJar("")
 		test.run(t, jar)
 	}
 }
@@ -939,7 +964,7 @@ var chromiumDomainTests = [...]jarTest{
 }
 
 func TestChromiumDomain(t *testing.T) {
-	jar := newTestJar()
+	jar := newTestJar("")
 	for _, test := range chromiumDomainTests {
 		test.run(t, jar)
 	}
@@ -1007,7 +1032,7 @@ var chromiumDeletionTests = [...]jarTest{
 }
 
 func TestChromiumDeletion(t *testing.T) {
-	jar := newTestJar()
+	jar := newTestJar("")
 	for _, test := range chromiumDeletionTests {
 		test.run(t, jar)
 	}
@@ -1182,7 +1207,7 @@ var domainHandlingTests = [...]jarTest{
 
 func TestDomainHandling(t *testing.T) {
 	for _, test := range domainHandlingTests {
-		jar := newTestJar()
+		jar := newTestJar("")
 		test.run(t, jar)
 	}
 }
@@ -1207,54 +1232,54 @@ var mergeTests = []struct {
 }{{
 	description: "empty jar1",
 	setCookies0: []mergeCookie{
-		{atTime(0), "http://www.host.test", "A=a"},
+		{atTime(0), "http://www.host.test", "A=a; max-age=10"},
 	},
 	now:     atTime(1),
 	content: "A=a",
 }, {
 	description: "empty jar0",
 	setCookies1: []mergeCookie{
-		{atTime(0), "http://www.host.test", "A=a"},
+		{atTime(0), "http://www.host.test", "A=a; max-age=10"},
 	},
 	now:     atTime(1),
 	content: "A=a",
 }, {
 	description: "simple override (1)",
 	setCookies0: []mergeCookie{
-		{atTime(0), "http://www.host.test", "A=a"},
+		{atTime(0), "http://www.host.test", "A=a; max-age=10"},
 	},
 	setCookies1: []mergeCookie{
-		{atTime(1), "http://www.host.test", "A=b"},
+		{atTime(1), "http://www.host.test", "A=b; max-age=10"},
 	},
 	now:     atTime(2),
 	content: "A=b",
 }, {
 	description: "simple override (2)",
 	setCookies0: []mergeCookie{
-		{atTime(1), "http://www.host.test", "A=a"},
+		{atTime(1), "http://www.host.test", "A=a; max-age=10"},
 	},
 	setCookies1: []mergeCookie{
-		{atTime(0), "http://www.host.test", "A=b"},
+		{atTime(0), "http://www.host.test", "A=b; max-age=10"},
 	},
 	now:     atTime(2),
 	content: "A=a",
 }, {
-	description: "expires overrides set",
+	description: "expired cookie overrides unexpired cookie",
 	setCookies0: []mergeCookie{
-		{atTime(1), "http://www.host.test", "A=a; " + expiresIn(-1)},
+		{atTime(1), "http://www.host.test", "A=a; max-age=-1"},
 	},
 	setCookies1: []mergeCookie{
-		{atTime(0), "http://www.host.test", "A=b"},
+		{atTime(0), "http://www.host.test", "A=b; max-age=10"},
 	},
 	now:     atTime(2),
 	content: "",
 }, {
 	description: "set overrides expires",
 	setCookies0: []mergeCookie{
-		{atTime(1), "http://www.host.test", "A=a"},
+		{atTime(1), "http://www.host.test", "A=a; max-age=10"},
 	},
 	setCookies1: []mergeCookie{
-		{atTime(0), "http://www.host.test", "A=b; " + expiresIn(-1)},
+		{atTime(0), "http://www.host.test", "A=b; max-age=-1"},
 	},
 	now:     atTime(2),
 	content: "A=a",
@@ -1276,26 +1301,46 @@ var mergeTests = []struct {
 }, {
 	description: "prefer receiver when creation times are identical",
 	setCookies0: []mergeCookie{
-		{atTime(0), "http://www.host.test", "A=a"},
+		{atTime(0), "http://www.host.test", "A=a; max-age=10"},
 	},
 	setCookies1: []mergeCookie{
-		{atTime(0), "http://www.host.test", "A=b"},
+		{atTime(0), "http://www.host.test", "A=b; max-age=10"},
 	},
 	now:     atTime(2),
 	content: "A=a",
 }, {
-	description: "many hosts",
+	description: "max-age is persistent even when negative",
 	setCookies0: []mergeCookie{
-		{atTime(1), "http://www.host.test", "A=a0"},
-		{atTime(2), "http://www.host.test/foo/", "A=foo0"},
-		{atTime(1), "http://www.elsewhere", "X=x"},
+		{atTime(0), "http://www.host.test", "A=a; max-age=10"},
 	},
 	setCookies1: []mergeCookie{
-		{atTime(1), "http://www.host.test", "A=a1"},
-		{atTime(3), "http://www.host.test", "B=b"},
-		{atTime(1), "http://www.host.test/foo/", "A=foo1"},
-		{atTime(0), "http://www.host.test/foo/", "C=arble"},
-		{atTime(1), "http://nowhere.com", "A=n"},
+		{atTime(1), "http://www.host.test", "A=b; max-age=-1"},
+	},
+	now:     atTime(2),
+	content: "",
+}, {
+	description: "expires is persistent even when in the past",
+	setCookies0: []mergeCookie{
+		{atTime(0), "http://www.host.test", "A=a; " + expiresIn(2)},
+	},
+	setCookies1: []mergeCookie{
+		{atTime(1), "http://www.host.test", "A=b; " + expiresIn(-1)},
+	},
+	now:     atTime(2),
+	content: "",
+}, {
+	description: "many hosts",
+	setCookies0: []mergeCookie{
+		{atTime(1), "http://www.host.test", "A=a0; max-age=10"},
+		{atTime(2), "http://www.host.test/foo/", "A=foo0; max-age=10"},
+		{atTime(1), "http://www.elsewhere", "X=x; max-age=10"},
+	},
+	setCookies1: []mergeCookie{
+		{atTime(1), "http://www.host.test", "A=a1; max-age=10"},
+		{atTime(3), "http://www.host.test", "B=b; max-age=10"},
+		{atTime(1), "http://www.host.test/foo/", "A=foo1; max-age=10"},
+		{atTime(0), "http://www.host.test/foo/", "C=arble; max-age=10"},
+		{atTime(1), "http://nowhere.com", "A=n; max-age=10"},
 	},
 	now:     atTime(2),
 	content: "A=a0 A=foo0 A=n B=b C=arble X=x",
@@ -1307,17 +1352,30 @@ var mergeTests = []struct {
 	},
 }}
 
-func TestMerge(t *testing.T) {
-	for _, test := range mergeTests {
-		jar0 := newTestJar()
+func TestSaveMerge(t *testing.T) {
+	dir, err := ioutil.TempDir("", "cookiejar-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	for i, test := range mergeTests {
+		path := filepath.Join(dir, fmt.Sprintf("jar%d", i))
+		jar0 := newTestJar(path)
 		for _, sc := range test.setCookies0 {
 			sc.set(jar0)
 		}
-		jar1 := newTestJar()
+		jar1 := newTestJar(path)
 		for _, sc := range test.setCookies1 {
 			sc.set(jar1)
 		}
-		jar0.merge(jar1, test.now)
+		err := jar1.save(test.now)
+		if err != nil {
+			t.Fatalf("Test %q; cannot save first jar: %v", test.description, err)
+		}
+		err = jar0.save(test.now)
+		if err != nil {
+			t.Fatalf("Test %q; cannot save: %v", test.description, err)
+		}
 		got := allCookies(jar0, test.now)
 
 		// Make sure jar content matches our expectations.
@@ -1330,26 +1388,27 @@ func TestMerge(t *testing.T) {
 	}
 }
 
-func TestMergeSelf(t *testing.T) {
-	// Make sure it doesn't deadlock.
-	jar := newTestJar()
-	jar.Merge(jar)
-}
-
 func TestMergeConcurrent(t *testing.T) {
 	// This test is designed to fail when run with the race
 	// detector. The actual final content of the jars is non-deterministic
 	// so we don't test that.
 	const N = 10
 
-	jar0 := newTestJar()
-	jar1 := newTestJar()
+	f, err := ioutil.TempFile("", "cookiejar-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+
+	jar0 := newTestJar(f.Name())
+	jar1 := newTestJar(f.Name())
 	var wg sync.WaitGroup
 	url := mustParseURL("http://foo.com")
-	merger := func(j0, j1 *Jar) {
+	merger := func(j *Jar) {
 		defer wg.Done()
 		for i := 0; i < N; i++ {
-			j0.Merge(j1)
+			j.Save()
 		}
 	}
 	getter := func(j *Jar) {
@@ -1361,13 +1420,13 @@ func TestMergeConcurrent(t *testing.T) {
 	setter := func(j *Jar, what string) {
 		defer wg.Done()
 		for i := 0; i < N; i++ {
-			setCookies(j, url.String(), []string{fmt.Sprintf("A=a%s%d", what, i)}, time.Now())
+			setCookies(j, url.String(), []string{fmt.Sprintf("A=a%s%d; max-age=10", what, i)}, time.Now())
 		}
 	}
 	wg.Add(1)
-	go merger(jar1, jar0)
+	go merger(jar1)
 	wg.Add(1)
-	go merger(jar0, jar1)
+	go merger(jar0)
 	wg.Add(1)
 	go getter(jar0)
 	wg.Add(1)
@@ -1382,7 +1441,7 @@ func TestMergeConcurrent(t *testing.T) {
 
 func TestDeleteExpired(t *testing.T) {
 	expirySeconds := int(expiryRemovalDuration / time.Second)
-	jar := newTestJar()
+	jar := newTestJar("")
 
 	now := tNow
 	setCookies(jar, "http://foo.com", []string{
@@ -1418,6 +1477,147 @@ func TestDeleteExpired(t *testing.T) {
 	want = "b=b"
 	if got != want {
 		t.Errorf("Unexpected content\ngot  %q\nwant %q", got, want)
+	}
+}
+
+var serializeTestCookies = []*http.Cookie{{
+	Name:       "foo",
+	Value:      "bar",
+	Path:       "/p",
+	Domain:     "0.4.4.4",
+	Expires:    time.Now(),
+	RawExpires: time.Now().Format(time.RFC3339Nano),
+	MaxAge:     99,
+	Secure:     true,
+	HttpOnly:   true,
+	Raw:        "raw string",
+	Unparsed:   []string{"x", "y", "z"},
+}}
+
+var serializeTestURL, _ = url.Parse("http://0.1.2.3/x")
+
+func TestLoadSave(t *testing.T) {
+	d, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatalf("cannot make temp dir: %v", err)
+	}
+	defer os.RemoveAll(d)
+	file := filepath.Join(d, "cookies")
+	j := newTestJar(file)
+	j.SetCookies(serializeTestURL, serializeTestCookies)
+	if err := j.Save(); err != nil {
+		t.Fatalf("cannot save: %v", err)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("file was not created")
+	}
+	j1 := newTestJar(file)
+	if !reflect.DeepEqual(j1.entries, j.entries) {
+		t.Fatalf("entries differ after serialization")
+	}
+}
+
+func TestLoadDifferentPublicSuffixList(t *testing.T) {
+	f, err := ioutil.TempFile("", "cookiejar-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+	now := tNow
+	// With no public suffix list, some domains that should be
+	// separate can set cookies for each other.
+	jar, err := newAtTime(&Options{
+		Filename:         f.Name(),
+		PublicSuffixList: emptyPSL{},
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setCookies(jar, "http://foo.co.uk", []string{
+		"a=a; max-age=10; domain=.co.uk",
+	}, now)
+	setCookies(jar, "http://bar.co.uk", []string{
+		"b=b; max-age=10; domain=.co.uk",
+	}, now)
+
+	// With the default public suffix, the cookies are
+	// correctly segmented into their proper domains.
+	queries := []query{
+		{"http://foo.co.uk/", "a=a b=b"},
+		{"http://bar.co.uk/", "a=a b=b"},
+	}
+	testQueries(t, queries, "no public suffix list", jar, now)
+	if err := jar.save(now); err != nil {
+		t.Fatalf("cannot save jar: %v", err)
+	}
+
+	jar, err = newAtTime(&Options{
+		Filename:         f.Name(),
+		PublicSuffixList: testPSL{},
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries = []query{
+		{"http://foo.co.uk/", "a=a"},
+		{"http://bar.co.uk/", "b=b"},
+	}
+	testQueries(t, queries, "with test public suffix list", jar, now)
+	if err := jar.save(now); err != nil {
+		t.Fatalf("cannot save jar: %v", err)
+	}
+
+	// When we reload with the original (empty) public suffix
+	// we get all the original cookies back.
+	jar, err = newAtTime(&Options{
+		Filename:         f.Name(),
+		PublicSuffixList: emptyPSL{},
+	}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queries = []query{
+		{"http://foo.co.uk/", "a=a b=b"},
+		{"http://bar.co.uk/", "a=a b=b"},
+	}
+	testQueries(t, queries, "no public suffix list #2", jar, now)
+	if err := jar.save(now); err != nil {
+		t.Fatalf("cannot save jar: %v", err)
+	}
+}
+
+func TestLockFile(t *testing.T) {
+	f, err := ioutil.TempFile("", "cookiejar-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	defer os.Remove(f.Name())
+	concurrentCount := int64(0)
+	var wg sync.WaitGroup
+	locker := func() {
+		defer wg.Done()
+		closer, err := lockFile(f.Name())
+		if err != nil {
+			t.Errorf("cannot obtain lock")
+			return
+		}
+		x := atomic.AddInt64(&concurrentCount, 1)
+		if x > 1 {
+			t.Errorf("multiple locks held at one time")
+		}
+		defer closer.Close()
+		time.Sleep(10 * time.Millisecond)
+		atomic.AddInt64(&concurrentCount, -1)
+	}
+	wg.Add(4)
+	for i := 0; i < 4; i++ {
+		go locker()
+	}
+	wg.Wait()
+	if concurrentCount != 0 {
+		t.Errorf("expected no running goroutines left")
 	}
 }
 
