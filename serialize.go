@@ -79,13 +79,20 @@ func (j *Jar) load() error {
 // mergeFrom reads all the cookies from r and stores them in the Jar.
 func (j *Jar) mergeFrom(r io.Reader) error {
 	decoder := json.NewDecoder(r)
-	var entries []entry
-	if err := decoder.Decode(&entries); err != nil {
+	// Cope with old cookiejar format by just discarding
+	// cookies, but still return an error if it's invalid JSON.
+	var data json.RawMessage
+	if err := decoder.Decode(&data); err != nil {
 		if err == io.EOF {
 			// Empty file.
 			return nil
 		}
 		return err
+	}
+	var entries []entry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		log.Printf("warning: discarding cookies in invalid format (error: %v)", err)
+		return nil
 	}
 	j.merge(entries)
 	return nil
