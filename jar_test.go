@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -1514,6 +1515,50 @@ func TestLoadSave(t *testing.T) {
 	j1 := newTestJar(file)
 	if !reflect.DeepEqual(j1.entries, j.entries) {
 		t.Fatalf("entries differ after serialization")
+	}
+}
+
+func TestLoadOldFormat(t *testing.T) {
+	// Check that loading the old format (a JSON object)
+	// doesn't result in an error.
+	f, err := ioutil.TempFile("", "cookiejar-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.Write([]byte("{}"))
+	f.Close()
+	jar, err := New(&Options{
+		Filename: f.Name(),
+	})
+	if err != nil {
+		t.Errorf("got error: %v", err)
+	}
+	if jar == nil {
+		t.Errorf("nil jar")
+	}
+}
+
+func TestLoadInvalidJSON(t *testing.T) {
+	f, err := ioutil.TempFile("", "cookiejar-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.Write([]byte("["))
+	f.Close()
+	jar, err := New(&Options{
+		Filename: f.Name(),
+	})
+	if err == nil {
+		t.Fatalf("expected error, got none")
+	}
+	want := "cannot load cookies: unexpected EOF"
+	if ok, _ := regexp.MatchString(want, err.Error()); !ok {
+		t.Fatalf("unexpected error message; want %q got %q", want, err.Error())
+	}
+	if jar != nil {
+		t.Fatalf("got nil jar")
 	}
 }
 
