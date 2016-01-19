@@ -136,12 +136,13 @@ func lockFile(path string) (io.Closer, error) {
 	retry := 100 * time.Microsecond
 	startTime := time.Now()
 	for {
-		if locker, err := filelock.Lock(path); err == nil {
+		locker, err := filelock.Lock(path)
+		if err == nil {
 			return locker, nil
 		}
 		total := time.Since(startTime)
 		if total > maxRetryDuration {
-			return nil, errgo.New("file locked for too long; giving up")
+			return nil, errgo.Notef(err, "file locked for too long; giving up")
 		}
 		// Always have at least one try at the end of the interval.
 		if remain := maxRetryDuration - total; retry > remain {
