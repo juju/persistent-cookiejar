@@ -12,7 +12,7 @@ import (
 	"sort"
 	"time"
 
-	filelock "github.com/camlistore/lock"
+	filelock "github.com/juju/go4/lock"
 	"gopkg.in/errgo.v1"
 )
 
