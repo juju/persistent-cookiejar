@@ -9,6 +9,17 @@ methods for dumping the cookies to persistent storage and retrieving them.
 
 ## Usage
 
+#### func  DefaultCookieFile
+
+```go
+func DefaultCookieFile() string
+```
+DefaultCookieFile returns the default cookie file to use for persisting cookie
+data. The following names will be used in decending order of preference:
+
+    - the value of the $GOCOOKIES environment variable.
+    - $HOME/.go-cookies
+
 #### type Jar
 
 ```go
@@ -25,6 +36,9 @@ func New(o *Options) (*Jar, error)
 ```
 New returns a new cookie jar. A nil *Options is equivalent to a zero Options.
 
+New will return an error if the cookies could not be loaded from the file for
+any reason than if the file does not exist.
+
 #### func (*Jar) Cookies
 
 ```go
@@ -34,35 +48,14 @@ Cookies implements the Cookies method of the http.CookieJar interface.
 
 It returns an empty slice if the URL's scheme is not HTTP or HTTPS.
 
-#### func (*Jar) Load
-
-```go
-func (j *Jar) Load(path string) error
-```
-Load uses j.ReadFrom to read cookies from the file at the given path. If the
-file does not exist, no error will be returned and no cookies will be loaded.
-
-The path will be stored in the jar and used when j.Save is next called.
-
-#### func (*Jar) ReadFrom
-
-```go
-func (j *Jar) ReadFrom(r io.Reader) error
-```
-ReadFrom reads all the cookies from r and stores them in the Jar.
-
 #### func (*Jar) Save
 
 ```go
 func (j *Jar) Save() error
 ```
-Save uses j.WriteTo to save the cookies in j to a file at the path they were
-loaded from with Load. Note that there is no locking of the file, so concurrent
-calls to Save and Load can yield corrupted or missing cookies.
-
-It returns an error if Load was not called.
-
-TODO(rog) implement decent semantics for concurrent use.
+Save saves the cookies to the persistent cookie file. Before the file is
+written, it reads any cookies that have been stored from it and merges them into
+j.
 
 #### func (*Jar) SetCookies
 
@@ -73,13 +66,6 @@ SetCookies implements the SetCookies method of the http.CookieJar interface.
 
 It does nothing if the URL's scheme is not HTTP or HTTPS.
 
-#### func (*Jar) WriteTo
-
-```go
-func (j *Jar) WriteTo(w io.Writer) error
-```
-WriteTo writes all the cookies in the jar to w as a JSON object.
-
 #### type Options
 
 ```go
@@ -87,10 +73,13 @@ type Options struct {
 	// PublicSuffixList is the public suffix list that determines whether
 	// an HTTP server can set a cookie for a domain.
 	//
-	// A nil value is valid and may be useful for testing but it is not
-	// secure: it means that the HTTP server for foo.co.uk can set a cookie
-	// for bar.co.uk.
+	// If this is nil, the public suffix list implementation in golang.org/x/net/publicsuffix
+	// is used.
 	PublicSuffixList PublicSuffixList
+
+	// Filename holds the file to use for storage of the cookies.
+	// If it is empty, the value of DefaultCookieFile will be used.
+	Filename string
 }
 ```
 
