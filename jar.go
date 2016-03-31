@@ -23,9 +23,8 @@ import (
 	"sync"
 	"time"
 
-	"gopkg.in/errgo.v1"
-
 	"golang.org/x/net/publicsuffix"
+	"gopkg.in/errgo.v1"
 )
 
 // PublicSuffixList provides the public suffix of a domain. For example:
@@ -157,9 +156,14 @@ type entry struct {
 	CanonicalHost string
 }
 
-// Id returns the domain;path;name triple of e as an id.
+// id returns the domain;path;name triple of e as an id.
 func (e *entry) id() string {
-	return fmt.Sprintf("%s;%s;%s", e.Domain, e.Path, e.Name)
+	return id(e.Domain, e.Path, e.Name)
+}
+
+// id returns the domain;path;name triple as an id.
+func id(domain, path, name string) string {
+	return fmt.Sprintf("%s;%s;%s", domain, path, name)
 }
 
 // shouldSend determines whether e's cookie qualifies to be included in a
@@ -293,6 +297,62 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 	}
 
 	return cookies
+}
+
+// AllCookies returns all cookies in the jar. The returned cookies will
+// have Domain, Expires, HttpOnly, Name, Secure, Path, and Value filled
+// out. Expired cookies will not be returned. This function does not
+// modify the cookie jar.
+func (j *Jar) AllCookies() (cookies []*http.Cookie) {
+	return j.allCookies(time.Now())
+}
+
+// allCookies is like AllCookies but takes the current time as a parameter.
+func (j *Jar) allCookies(now time.Time) []*http.Cookie {
+	var selected []entry
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, submap := range j.entries {
+		for _, e := range submap {
+			if !e.Expires.After(now) {
+				// Do not return expired cookies.
+				continue
+			}
+			selected = append(selected, e)
+		}
+	}
+
+	sort.Sort(byCanonicalHost{byPathLength(selected)})
+	cookies := make([]*http.Cookie, len(selected))
+	for i, e := range selected {
+		// Note: The returned cookies do not contain sufficient
+		// information to recreate the database.
+		cookies[i] = &http.Cookie{
+			Name:     e.Name,
+			Value:    e.Value,
+			Path:     e.Path,
+			Domain:   e.Domain,
+			Expires:  e.Expires,
+			Secure:   e.Secure,
+			HttpOnly: e.HttpOnly,
+		}
+	}
+
+	return cookies
+}
+
+// RemoveCookie removes the cookie matching the name, domain and path
+// specified by c.
+func (j *Jar) RemoveCookie(c *http.Cookie) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	id := id(c.Domain, c.Path, c.Name)
+	key := jarKey(c.Domain, j.psList)
+	if e, ok := j.entries[key][id]; ok {
+		e.Value = ""
+		e.Expires = time.Now().Add(-1 * time.Second)
+		j.entries[key][id] = e
+	}
 }
 
 // merge merges all the given entries into j. More recently changed
