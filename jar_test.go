@@ -1738,7 +1738,7 @@ func allCookies(jar *Jar, now time.Time) string {
 	return strings.Join(cs, " ")
 }
 
-// allCookies returns all unexpired cookies in the jar
+// allCookiesIncludingExpired returns all cookies in the jar
 // in the form "name1=val1 name2=val2"
 // (entries sorted by string), including cookies that
 // have expired (without their values)
@@ -1795,4 +1795,181 @@ func mustParseURL(s string) *url.URL {
 		panic(fmt.Sprintf("Unable to parse URL %s.", s))
 	}
 	return u
+}
+
+type setCommand struct {
+	url     *url.URL
+	cookies []*http.Cookie
+}
+
+var allCookiesTests = []struct {
+	about         string
+	set           []setCommand
+	expectCookies []*http.Cookie
+}{{
+	about: "no cookies",
+}, {
+	about: "a cookie",
+	set: []setCommand{{
+		url: mustParseURL("https://www.google.com/"),
+		cookies: []*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: tNow.Add(24 * time.Hour),
+			},
+		},
+	}},
+	expectCookies: []*http.Cookie{
+		&http.Cookie{
+			Name:     "test-cookie",
+			Value:    "test-value",
+			Domain:   "www.google.com",
+			Path:     "/",
+			Secure:   false,
+			HttpOnly: false,
+			Expires:  tNow.Add(24 * time.Hour),
+		},
+	},
+}, {
+	about: "expired cookie",
+	set: []setCommand{{
+		url: mustParseURL("https://www.google.com/"),
+		cookies: []*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: tNow.Add(-24 * time.Hour),
+			},
+		},
+	}},
+}, {
+	about: "cookie for subpath",
+	set: []setCommand{{
+		url: mustParseURL("https://www.google.com/subpath/place"),
+		cookies: []*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: tNow.Add(24 * time.Hour),
+			},
+		},
+	}},
+	expectCookies: []*http.Cookie{
+		&http.Cookie{
+			Name:     "test-cookie",
+			Value:    "test-value",
+			Domain:   "www.google.com",
+			Path:     "/subpath",
+			Secure:   false,
+			HttpOnly: false,
+			Expires:  tNow.Add(24 * time.Hour),
+		},
+	},
+}, {
+	about: "multiple cookies",
+	set: []setCommand{{
+		url: mustParseURL("https://www.google.com/"),
+		cookies: []*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: tNow.Add(24 * time.Hour),
+			},
+		},
+	}, {
+		url: mustParseURL("https://www.google.com/subpath/"),
+		cookies: []*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: tNow.Add(24 * time.Hour),
+			},
+		},
+	}},
+	expectCookies: []*http.Cookie{
+		&http.Cookie{
+			Name:     "test-cookie",
+			Value:    "test-value",
+			Domain:   "www.google.com",
+			Path:     "/subpath",
+			Secure:   false,
+			HttpOnly: false,
+			Expires:  tNow.Add(24 * time.Hour),
+		},
+		&http.Cookie{
+			Name:     "test-cookie",
+			Value:    "test-value",
+			Domain:   "www.google.com",
+			Path:     "/",
+			Secure:   false,
+			HttpOnly: false,
+			Expires:  tNow.Add(24 * time.Hour),
+		},
+	},
+}}
+
+func TestAllCookies(t *testing.T) {
+	dir, err := ioutil.TempDir("", "cookiejar-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	for i, test := range allCookiesTests {
+		path := filepath.Join(dir, fmt.Sprintf("jar%d", i))
+		jar := newTestJar(path)
+		for _, s := range test.set {
+			jar.setCookies(s.url, s.cookies, tNow)
+		}
+		gotCookies := jar.allCookies(tNow)
+		if len(gotCookies) != len(test.expectCookies) {
+			t.Fatalf("Test %q: unexpected number of cookies returned, expected: %d, got: %d", test.about, len(test.expectCookies), len(gotCookies))
+		}
+		for j, c := range test.expectCookies {
+			if !cookiesEqual(c, gotCookies[j]) {
+				t.Fatalf("Test %q: mismatch in cookies[%d], expected: %#v, got: %#v", test.about, j, *c, *gotCookies[j])
+			}
+		}
+	}
+}
+
+func TestRemoveCookies(t *testing.T) {
+	jar := newTestJar("")
+	jar.SetCookies(
+		mustParseURL("https://www.google.com"),
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie2",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+		},
+	)
+	cookies := jar.AllCookies()
+	if len(cookies) != 2 {
+		t.Fatalf("Expected 2 cookies got %d", len(cookies))
+	}
+	jar.RemoveCookie(cookies[0])
+	cookies2 := jar.AllCookies()
+	if len(cookies2) != 1 {
+		t.Fatalf("Expected 1 cookie got %d", len(cookies))
+	}
+	if !cookiesEqual(cookies[1], cookies2[0]) {
+		t.Fatalf("Unexpected cookie removed")
+	}
+}
+
+func cookiesEqual(a, b *http.Cookie) bool {
+	return a.Name == b.Name &&
+		a.Value == b.Value &&
+		a.Domain == b.Domain &&
+		a.Path == b.Path &&
+		a.Expires.Equal(b.Expires) &&
+		a.HttpOnly == b.HttpOnly &&
+		a.Secure == b.Secure
 }
