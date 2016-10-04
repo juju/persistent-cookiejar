@@ -292,10 +292,22 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 	}
 
 	sort.Sort(byPathLength(selected))
-	for _, e := range selected {
-		cookies = append(cookies, &http.Cookie{Name: e.Name, Value: e.Value})
-	}
+	return toCookies(selected)
+}
 
+func toCookies(entries []entry) []*http.Cookie {
+	cookies := make([]*(http.Cookie), len(entries))
+	for i, e := range entries {
+		cookies[i] = &http.Cookie{
+			Name:     e.Name,
+			Value:    e.Value,
+			Path:     e.Path,
+			Domain:   e.Domain,
+			Expires:  e.Expires,
+			Secure:   e.Secure,
+			HttpOnly: e.HttpOnly,
+		}
+	}
 	return cookies
 }
 
@@ -323,22 +335,7 @@ func (j *Jar) allCookies(now time.Time) []*http.Cookie {
 	}
 
 	sort.Sort(byCanonicalHost{byPathLength(selected)})
-	cookies := make([]*http.Cookie, len(selected))
-	for i, e := range selected {
-		// Note: The returned cookies do not contain sufficient
-		// information to recreate the database.
-		cookies[i] = &http.Cookie{
-			Name:     e.Name,
-			Value:    e.Value,
-			Path:     e.Path,
-			Domain:   e.Domain,
-			Expires:  e.Expires,
-			Secure:   e.Secure,
-			HttpOnly: e.HttpOnly,
-		}
-	}
-
-	return cookies
+	return toCookies(selected)
 }
 
 // RemoveCookie removes the cookie matching the name, domain and path

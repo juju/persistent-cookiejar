@@ -1964,6 +1964,38 @@ func TestRemoveCookies(t *testing.T) {
 	}
 }
 
+func TestRemoveURLCookies(t *testing.T) {
+	jar := newTestJar("")
+	u := mustParseURL("https://www.google.com")
+	jar.SetCookies(
+		u,
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie2",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+		},
+	)
+	cookies := jar.Cookies(u)
+	if len(cookies) != 2 {
+		t.Fatalf("Expected 2 cookies got %d", len(cookies))
+	}
+	jar.RemoveCookie(cookies[0])
+	cookies2 := jar.Cookies(u)
+	if len(cookies2) != 1 {
+		t.Fatalf("Expected 1 cookie got %d", len(cookies))
+	}
+	if !cookiesEqual(cookies[1], cookies2[0]) {
+		t.Fatalf("Unexpected cookie removed")
+	}
+}
+
 func cookiesEqual(a, b *http.Cookie) bool {
 	return a.Name == b.Name &&
 		a.Value == b.Value &&
