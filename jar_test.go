@@ -1965,32 +1965,46 @@ func TestRemoveCookies(t *testing.T) {
 }
 
 func TestRemoveAll(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://www.apple.com"), "www.apple.com")
+}
+
+func TestRemoveAllRoot(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://www.apple.com"), "apple.com")
+}
+
+func TestRemoveAllWithPort(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://www.apple.com"), "www.apple.com:80")
+}
+
+func TestRemoveAllIP(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://10.1.1.1"), "10.1.1.1")
+}
+
+func testRemoveAll(t *testing.T, setURL *url.URL, removeHost string) {
 	jar := newTestJar("")
 	google := mustParseURL("https://www.google.com")
-	apple := mustParseURL("https://www.apple.com")
-	cookies := []*http.Cookie{
-		&http.Cookie{
-			Name:    "test-cookie",
-			Value:   "test-value",
-			Expires: time.Now().Add(24 * time.Hour),
-		},
-		&http.Cookie{
-			Name:    "test-cookie2",
-			Value:   "test-value",
-			Expires: time.Now().Add(24 * time.Hour),
-		},
-	}
 	jar.SetCookies(
 		google,
-		cookies,
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie2",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+		},
 	)
-	original := jar.AllCookies()
-	if len(original) != 2 {
-		t.Fatalf("Expected 2 cookies, got %d", len(original))
+	onlyGoogle := jar.AllCookies()
+	if len(onlyGoogle) != 2 {
+		t.Fatalf("Expected 2 cookies, got %d", len(onlyGoogle))
 	}
 
 	jar.SetCookies(
-		apple,
+		setURL,
 		[]*http.Cookie{
 			&http.Cookie{
 				Name:    "test-cookie3",
@@ -2004,20 +2018,20 @@ func TestRemoveAll(t *testing.T) {
 			},
 		},
 	)
-	withApple := jar.AllCookies()
-	if len(withApple) != 4 {
-		t.Fatalf("Expected 4 cookies, got %d", len(withApple))
+	withSet := jar.AllCookies()
+	if len(withSet) != 4 {
+		t.Fatalf("Expected 4 cookies, got %d", len(withSet))
 	}
-	jar.RemoveAll(apple)
+	jar.RemoveAll(removeHost)
 	after := jar.AllCookies()
-	if len(after) != 2 {
-		t.Fatalf("Expected 2 cookies, got %d", len(after))
+	if len(after) != len(onlyGoogle) {
+		t.Fatalf("Expected %d cookies, got %d", len(onlyGoogle), len(after))
 	}
-	if !cookiesEqual(original[0], after[0]) {
-		t.Fatalf("Expected %v, got %v", original[0], after[0])
+	if !cookiesEqual(onlyGoogle[0], after[0]) {
+		t.Fatalf("Expected %v, got %v", onlyGoogle[0], after[0])
 	}
-	if !cookiesEqual(original[1], after[1]) {
-		t.Fatalf("Expected %v, got %v", original[1], after[1])
+	if !cookiesEqual(onlyGoogle[1], after[1]) {
+		t.Fatalf("Expected %v, got %v", onlyGoogle[1], after[1])
 	}
 }
 

@@ -396,11 +396,11 @@ func (j *Jar) deleteExpired(now time.Time) {
 	}
 }
 
-// RemoveAll removes any cookies from the jar that were set for the given URL.
-func (j *Jar) RemoveAll(u *url.URL) {
+// RemoveAll removes any cookies from the jar that were set for the given host.
+func (j *Jar) RemoveAll(host string) {
 	now := time.Now().Add(-1 * time.Second)
 
-	host, err := canonicalHost(u.Host)
+	host, err := canonicalHost(host)
 	if err != nil {
 		return
 	}
