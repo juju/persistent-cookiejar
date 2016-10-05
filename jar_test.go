@@ -1964,6 +1964,63 @@ func TestRemoveCookies(t *testing.T) {
 	}
 }
 
+func TestRemoveAll(t *testing.T) {
+	jar := newTestJar("")
+	google := mustParseURL("https://www.google.com")
+	apple := mustParseURL("https://www.apple.com")
+	cookies := []*http.Cookie{
+		&http.Cookie{
+			Name:    "test-cookie",
+			Value:   "test-value",
+			Expires: time.Now().Add(24 * time.Hour),
+		},
+		&http.Cookie{
+			Name:    "test-cookie2",
+			Value:   "test-value",
+			Expires: time.Now().Add(24 * time.Hour),
+		},
+	}
+	jar.SetCookies(
+		google,
+		cookies,
+	)
+	original := jar.AllCookies()
+	if len(original) != 2 {
+		t.Fatalf("Expected 2 cookies, got %d", len(original))
+	}
+
+	jar.SetCookies(
+		apple,
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie3",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie4",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+		},
+	)
+	withApple := jar.AllCookies()
+	if len(withApple) != 4 {
+		t.Fatalf("Expected 4 cookies, got %d", len(withApple))
+	}
+	jar.RemoveAll(apple)
+	after := jar.AllCookies()
+	if len(after) != 2 {
+		t.Fatalf("Expected 2 cookies, got %d", len(after))
+	}
+	if !cookiesEqual(original[0], after[0]) {
+		t.Fatalf("Expected %v, got %v", original[0], after[0])
+	}
+	if !cookiesEqual(original[1], after[1]) {
+		t.Fatalf("Expected %v, got %v", original[1], after[1])
+	}
+}
+
 func cookiesEqual(a, b *http.Cookie) bool {
 	return a.Name == b.Name &&
 		a.Value == b.Value &&
