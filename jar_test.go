@@ -2022,7 +2022,7 @@ func testRemoveAll(t *testing.T, setURL *url.URL, removeHost string) {
 	if len(withSet) != 4 {
 		t.Fatalf("Expected 4 cookies, got %d", len(withSet))
 	}
-	jar.RemoveAll(removeHost)
+	jar.RemoveAllHost(removeHost)
 	after := jar.AllCookies()
 	if len(after) != len(onlyGoogle) {
 		t.Fatalf("Expected %d cookies, got %d", len(onlyGoogle), len(after))
