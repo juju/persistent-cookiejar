@@ -1964,6 +1964,87 @@ func TestRemoveCookies(t *testing.T) {
 	}
 }
 
+func TestRemoveAll(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://www.apple.com"), "www.apple.com", true)
+}
+
+func TestRemoveAllRoot(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://www.apple.com"), "apple.com", false)
+}
+
+func TestRemoveAllDifferent(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://www.apple.com"), "foo.apple.com", false)
+}
+
+func TestRemoveAllWithPort(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://www.apple.com"), "www.apple.com:80", true)
+}
+
+func TestRemoveAllIP(t *testing.T) {
+	testRemoveAll(t, mustParseURL("https://10.1.1.1"), "10.1.1.1", true)
+}
+
+func testRemoveAll(t *testing.T, setURL *url.URL, removeHost string, shouldRemove bool) {
+	jar := newTestJar("")
+	google := mustParseURL("https://www.google.com")
+	jar.SetCookies(
+		google,
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie2",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+		},
+	)
+	onlyGoogle := jar.AllCookies()
+	if len(onlyGoogle) != 2 {
+		t.Fatalf("Expected 2 cookies, got %d", len(onlyGoogle))
+	}
+
+	jar.SetCookies(
+		setURL,
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie3",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie4",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+		},
+	)
+	withSet := jar.AllCookies()
+	if len(withSet) != 4 {
+		t.Fatalf("Expected 4 cookies, got %d", len(withSet))
+	}
+	jar.RemoveAllHost(removeHost)
+	after := jar.AllCookies()
+	if !shouldRemove {
+		if len(after) != len(withSet) {
+			t.Fatalf("Expected %d cookies, got %d", len(withSet), len(after))
+		}
+		return
+	}
+	if len(after) != len(onlyGoogle) {
+		t.Fatalf("Expected %d cookies, got %d", len(onlyGoogle), len(after))
+	}
+	if !cookiesEqual(onlyGoogle[0], after[0]) {
+		t.Fatalf("Expected %v, got %v", onlyGoogle[0], after[0])
+	}
+	if !cookiesEqual(onlyGoogle[1], after[1]) {
+		t.Fatalf("Expected %v, got %v", onlyGoogle[1], after[1])
+	}
+}
+
 func cookiesEqual(a, b *http.Cookie) bool {
 	return a.Name == b.Name &&
 		a.Value == b.Value &&
