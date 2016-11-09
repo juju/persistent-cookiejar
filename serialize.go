@@ -12,7 +12,8 @@ import (
 	"sort"
 	"time"
 
-	filelock "github.com/juju/go4/lock"
+	"github.com/juju/mutex"
+	"github.com/juju/utils/clock"
 	"gopkg.in/errgo.v1"
 )
 
@@ -25,11 +26,11 @@ func (j *Jar) Save() error {
 
 // save is like Save but takes the current time as a parameter.
 func (j *Jar) save(now time.Time) error {
-	locked, err := lockFile(lockFileName(j.filename))
+	releaser, err := lockFile(j.filename)
 	if err != nil {
 		return errgo.Mask(err)
 	}
-	defer locked.Close()
+	defer releaser.Release()
 	f, err := os.OpenFile(j.filename, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return errgo.Mask(err)
@@ -57,11 +58,11 @@ func (j *Jar) save(now time.Time) error {
 // load loads the cookies from j.filename. If the file does not exist,
 // no error will be returned and no cookies will be loaded.
 func (j *Jar) load() error {
-	locked, err := lockFile(lockFileName(j.filename))
+	releaser, err := lockFile(j.filename)
 	if err != nil {
 		return errgo.Mask(err)
 	}
-	defer locked.Close()
+	defer releaser.Release()
 	f, err := os.Open(j.filename)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -124,21 +125,21 @@ func (j *Jar) allPersistentEntries() []entry {
 	return entries
 }
 
-// lockFileName returns the name of the lock file associated with
-// the given path.
-func lockFileName(path string) string {
-	return path + ".lock"
-}
+const maxRetryDuration = 2 * time.Second
 
-const maxRetryDuration = 1 * time.Second
-
-func lockFile(path string) (io.Closer, error) {
+func lockFile(path string) (mutex.Releaser, error) {
 	retry := 100 * time.Microsecond
 	startTime := time.Now()
 	for {
-		locker, err := filelock.Lock(path)
+		spec := mutex.Spec{
+			Name:    path,
+			Clock:   clock.WallClock,
+			Delay:   retry,
+			Timeout: maxRetryDuration,
+		}
+		releaser, err := mutex.Acquire(spec)
 		if err == nil {
-			return locker, nil
+			return releaser, nil
 		}
 		total := time.Since(startTime)
 		if total > maxRetryDuration {
@@ -149,6 +150,5 @@ func lockFile(path string) (io.Closer, error) {
 			retry = remain
 		}
 		time.Sleep(retry)
-		retry *= 2
 	}
 }
