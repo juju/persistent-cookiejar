@@ -1643,7 +1643,7 @@ func TestLockFile(t *testing.T) {
 	var wg sync.WaitGroup
 	locker := func() {
 		defer wg.Done()
-		closer, err := lockFile(filename)
+		releaser, err := lockFile(filename)
 		if err != nil {
 			t.Errorf("cannot obtain lock: %v", err)
 			return
@@ -1652,7 +1652,7 @@ func TestLockFile(t *testing.T) {
 		if x > 1 {
 			t.Errorf("multiple locks held at one time")
 		}
-		defer closer.Close()
+		defer releaser.Release()
 		time.Sleep(10 * time.Millisecond)
 		atomic.AddInt64(&concurrentCount, -1)
 	}

@@ -5,10 +5,15 @@
 package cookiejar
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"os"
+	"regexp"
 	"sort"
 	"time"
 
@@ -127,16 +132,41 @@ func (j *Jar) allPersistentEntries() []entry {
 
 const maxRetryDuration = 2 * time.Second
 
+var re = regexp.MustCompile(`[^a-z0-9A-Z]*`)
+
+func lockNameFromPath(path string) (string, error) {
+	if path == "" {
+		return "", errors.New("path cannot be empty")
+	}
+	pathBytes := []byte(path)
+	hash := sha256.New()
+	hash.Write(pathBytes)
+	sha := base64.URLEncoding.EncodeToString(hash.Sum(nil))
+
+	if len(path) > 10 {
+		sliceIndex := len(path) - 10
+		path = path[sliceIndex:]
+	}
+	// We start with an alphabetical character, and remove non alphanumeric
+	// characters so that we can't have an invalid name for the lock.
+	final := re.ReplaceAllLiteralString(fmt.Sprintf("L%v%v", sha[:29], path), ``)
+	return final, nil
+}
+
 func lockFile(path string) (mutex.Releaser, error) {
 	retry := 100 * time.Microsecond
 	startTime := time.Now()
+	name, err := lockNameFromPath(path)
+	if err != nil {
+		return nil, err
+	}
+	spec := mutex.Spec{
+		Name:    name,
+		Clock:   clock.WallClock,
+		Delay:   retry,
+		Timeout: maxRetryDuration,
+	}
 	for {
-		spec := mutex.Spec{
-			Name:    path,
-			Clock:   clock.WallClock,
-			Delay:   retry,
-			Timeout: maxRetryDuration,
-		}
 		releaser, err := mutex.Acquire(spec)
 		if err == nil {
 			return releaser, nil
