@@ -132,7 +132,7 @@ func (j *Jar) allPersistentEntries() []entry {
 
 const maxRetryDuration = 2 * time.Second
 
-var re = regexp.MustCompile(`[^a-z0-9A-Z]*`)
+var stripCharsRe = regexp.MustCompile(`[^a-z0-9A-Z]*`)
 
 func lockNameFromPath(path string) (string, error) {
 	if path == "" {
@@ -149,7 +149,8 @@ func lockNameFromPath(path string) (string, error) {
 	}
 	// We start with an alphabetical character, and remove non alphanumeric
 	// characters so that we can't have an invalid name for the lock.
-	final := re.ReplaceAllLiteralString(fmt.Sprintf("L%v%v", sha[:29], path), ``)
+	intermediateLockName := fmt.Sprintf("L%v%v", sha[:29], path)
+	final := stripCharsRe.ReplaceAllLiteralString(intermediateLockName, "")
 	return final, nil
 }
 
