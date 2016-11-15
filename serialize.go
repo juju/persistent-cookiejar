@@ -155,8 +155,7 @@ func lockNameFromPath(path string) (string, error) {
 }
 
 func lockFile(path string) (mutex.Releaser, error) {
-	retry := 100 * time.Microsecond
-	startTime := time.Now()
+	retry := 50 * time.Millisecond
 	name, err := lockNameFromPath(path)
 	if err != nil {
 		return nil, err
@@ -167,19 +166,5 @@ func lockFile(path string) (mutex.Releaser, error) {
 		Delay:   retry,
 		Timeout: maxRetryDuration,
 	}
-	for {
-		releaser, err := mutex.Acquire(spec)
-		if err == nil {
-			return releaser, nil
-		}
-		total := time.Since(startTime)
-		if total > maxRetryDuration {
-			return nil, errgo.Notef(err, "file locked for too long; giving up")
-		}
-		// Always have at least one try at the end of the interval.
-		if remain := maxRetryDuration - total; retry > remain {
-			retry = remain
-		}
-		time.Sleep(retry)
-	}
+	return mutex.Acquire(spec)
 }
