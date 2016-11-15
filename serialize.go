@@ -5,20 +5,16 @@
 package cookiejar
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"log"
 	"os"
-	"regexp"
 	"sort"
 	"time"
 
-	"github.com/juju/mutex"
-	"github.com/juju/utils/clock"
+	"gopkg.in/retry.v1"
+
+	filelock "github.com/juju/go4/lock"
 	"gopkg.in/errgo.v1"
 )
 
@@ -31,11 +27,11 @@ func (j *Jar) Save() error {
 
 // save is like Save but takes the current time as a parameter.
 func (j *Jar) save(now time.Time) error {
-	releaser, err := lockFile(j.filename)
+	locked, err := lockFile(lockFileName(j.filename))
 	if err != nil {
 		return errgo.Mask(err)
 	}
-	defer releaser.Release()
+	defer locked.Close()
 	f, err := os.OpenFile(j.filename, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
 		return errgo.Mask(err)
@@ -63,11 +59,11 @@ func (j *Jar) save(now time.Time) error {
 // load loads the cookies from j.filename. If the file does not exist,
 // no error will be returned and no cookies will be loaded.
 func (j *Jar) load() error {
-	releaser, err := lockFile(j.filename)
+	locked, err := lockFile(lockFileName(j.filename))
 	if err != nil {
 		return errgo.Mask(err)
 	}
-	defer releaser.Release()
+	defer locked.Close()
 	f, err := os.Open(j.filename)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -130,41 +126,27 @@ func (j *Jar) allPersistentEntries() []entry {
 	return entries
 }
 
-const maxRetryDuration = 2 * time.Second
-
-var stripCharsRe = regexp.MustCompile(`[^a-z0-9A-Z]*`)
-
-func lockNameFromPath(path string) (string, error) {
-	if path == "" {
-		return "", errors.New("path cannot be empty")
-	}
-	pathBytes := []byte(path)
-	hash := sha256.New()
-	hash.Write(pathBytes)
-	sha := base64.URLEncoding.EncodeToString(hash.Sum(nil))
-
-	if len(path) > 10 {
-		sliceIndex := len(path) - 10
-		path = path[sliceIndex:]
-	}
-	// We start with an alphabetical character, and remove non alphanumeric
-	// characters so that we can't have an invalid name for the lock.
-	intermediateLockName := fmt.Sprintf("L%v%v", sha[:29], path)
-	final := stripCharsRe.ReplaceAllLiteralString(intermediateLockName, "")
-	return final, nil
+// lockFileName returns the name of the lock file associated with
+// the given path.
+func lockFileName(path string) string {
+	return path + ".lock"
 }
 
-func lockFile(path string) (mutex.Releaser, error) {
-	retry := 50 * time.Millisecond
-	name, err := lockNameFromPath(path)
-	if err != nil {
-		return nil, err
+var attempt = retry.LimitTime(3*time.Second, retry.Exponential{
+	Initial:  100 * time.Microsecond,
+	Factor:   1.5,
+	MaxDelay: 100 * time.Millisecond,
+})
+
+func lockFile(path string) (io.Closer, error) {
+	for a := retry.Start(attempt, nil); a.Next(); {
+		locker, err := filelock.Lock(path)
+		if err == nil {
+			return locker, nil
+		}
+		if !a.More() {
+			return nil, errgo.Notef(err, "file locked for too long; giving up")
+		}
 	}
-	spec := mutex.Spec{
-		Name:    name,
-		Clock:   clock.WallClock,
-		Delay:   retry,
-		Timeout: maxRetryDuration,
-	}
-	return mutex.Acquire(spec)
+	panic("unreachable")
 }
