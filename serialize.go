@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -62,6 +63,12 @@ func (j *Jar) save(now time.Time) error {
 // load loads the cookies from j.filename. If the file does not exist,
 // no error will be returned and no cookies will be loaded.
 func (j *Jar) load() error {
+	if _, err := os.Stat(filepath.Dir(j.filename)); os.IsNotExist(err) {
+		// The directory that we'll store the cookie jar
+		// in doesn't exist, so don't bother trying
+		// to acquire the lock.
+		return nil
+	}
 	locked, err := lockFile(lockFileName(j.filename))
 	if err != nil {
 		return errgo.Mask(err)
