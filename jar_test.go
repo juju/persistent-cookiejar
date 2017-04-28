@@ -2030,27 +2030,27 @@ func TestRemoveCookies(t *testing.T) {
 	}
 }
 
-func TestRemoveAll(t *testing.T) {
-	testRemoveAll(t, mustParseURL("https://www.apple.com"), "www.apple.com", true)
+func TestRemoveAllHost(t *testing.T) {
+	testRemoveAllHost(t, mustParseURL("https://www.apple.com"), "www.apple.com", true)
 }
 
-func TestRemoveAllRoot(t *testing.T) {
-	testRemoveAll(t, mustParseURL("https://www.apple.com"), "apple.com", false)
+func TestRemoveAllHostRoot(t *testing.T) {
+	testRemoveAllHost(t, mustParseURL("https://www.apple.com"), "apple.com", false)
 }
 
-func TestRemoveAllDifferent(t *testing.T) {
-	testRemoveAll(t, mustParseURL("https://www.apple.com"), "foo.apple.com", false)
+func TestRemoveAllHostDifferent(t *testing.T) {
+	testRemoveAllHost(t, mustParseURL("https://www.apple.com"), "foo.apple.com", false)
 }
 
-func TestRemoveAllWithPort(t *testing.T) {
-	testRemoveAll(t, mustParseURL("https://www.apple.com"), "www.apple.com:80", true)
+func TestRemoveAllHostWithPort(t *testing.T) {
+	testRemoveAllHost(t, mustParseURL("https://www.apple.com"), "www.apple.com:80", true)
 }
 
-func TestRemoveAllIP(t *testing.T) {
-	testRemoveAll(t, mustParseURL("https://10.1.1.1"), "10.1.1.1", true)
+func TestRemoveAllHostIP(t *testing.T) {
+	testRemoveAllHost(t, mustParseURL("https://10.1.1.1"), "10.1.1.1", true)
 }
 
-func testRemoveAll(t *testing.T, setURL *url.URL, removeHost string, shouldRemove bool) {
+func testRemoveAllHost(t *testing.T, setURL *url.URL, removeHost string, shouldRemove bool) {
 	jar := newTestJar("")
 	google := mustParseURL("https://www.google.com")
 	jar.SetCookies(
@@ -2108,6 +2108,44 @@ func testRemoveAll(t *testing.T, setURL *url.URL, removeHost string, shouldRemov
 	}
 	if !cookiesEqual(onlyGoogle[1], after[1]) {
 		t.Fatalf("Expected %v, got %v", onlyGoogle[1], after[1])
+	}
+}
+
+func TestRemoveAll(t *testing.T) {
+	jar := newTestJar("")
+	jar.SetCookies(
+		mustParseURL("https://www.google.com"),
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie2",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+		},
+	)
+	jar.SetCookies(
+		mustParseURL("https://foo.com"),
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie3",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie4",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+		},
+	)
+	jar.RemoveAll()
+	if after := len(jar.AllCookies()); after != 0 {
+		t.Fatalf("%d cookies remaining after RemoveAll", after)
 	}
 }
 
