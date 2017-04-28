@@ -1552,6 +1552,38 @@ func TestLoadSaveWithNoPersist(t *testing.T) {
 	}
 }
 
+func TestLoadNonExistentParent(t *testing.T) {
+	d, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatalf("cannot make temp dir: %v", err)
+	}
+	defer os.RemoveAll(d)
+	file := filepath.Join(d, "foo", "cookies")
+	_, err = New(&Options{
+		PublicSuffixList: testPSL{},
+		Filename:         file,
+	})
+	if err != nil {
+		t.Fatalf("cannot make cookie jar: %v", err)
+	}
+}
+
+func TestLoadNonExistentParentOfParent(t *testing.T) {
+	d, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatalf("cannot make temp dir: %v", err)
+	}
+	defer os.RemoveAll(d)
+	file := filepath.Join(d, "foo", "foo", "cookies")
+	_, err = New(&Options{
+		PublicSuffixList: testPSL{},
+		Filename:         file,
+	})
+	if err != nil {
+		t.Fatalf("cannot make cookie jar: %v", err)
+	}
+}
+
 func TestLoadOldFormat(t *testing.T) {
 	// Check that loading the old format (a JSON object)
 	// doesn't result in an error.
