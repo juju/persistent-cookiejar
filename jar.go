@@ -422,6 +422,24 @@ func (j *Jar) RemoveAllHost(host string) {
 	}
 }
 
+// RemoveAll removes all the cookies from the jar.
+func (j *Jar) RemoveAll() {
+	expired := time.Now().Add(-1 * time.Second)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, submap := range j.entries {
+		for id, e := range submap {
+			// Save some space by deleting the value when the cookie
+			// expires. We can't delete the cookie itself because then
+			// we wouldn't know that the cookie had expired when
+			// we merge with another cookie jar.
+			e.Value = ""
+			e.Expires = expired
+			submap[id] = e
+		}
+	}
+}
+
 // SetCookies implements the SetCookies method of the http.CookieJar interface.
 //
 // It does nothing if the URL's scheme is not HTTP or HTTPS.
