@@ -21,9 +21,6 @@ import (
 	"time"
 )
 
-// nonExistentFile holds a large random number that is vanishingly unlikely to exist for real.
-var nonExistentFile = "98818e574592c54bf1ec90174e72e33081a0f8324c6e6302fa94ff389e6b7fc8"
-
 // tNow is the synthetic current time used as now during testing.
 var tNow = time.Date(2013, 1, 1, 12, 0, 0, 0, time.UTC)
 
@@ -54,12 +51,10 @@ func (emptyPSL) PublicSuffix(d string) string {
 
 // newTestJar creates an empty Jar with testPSL as the public suffix list.
 func newTestJar(path string) *Jar {
-	if path == "" {
-		path = nonExistentFile
-	}
 	jar, err := New(&Options{
 		PublicSuffixList: testPSL{},
 		Filename:         path,
+		NoPersist:        path == "",
 	})
 	if err != nil {
 		panic(err)
@@ -1515,6 +1510,45 @@ func TestLoadSave(t *testing.T) {
 	j1 := newTestJar(file)
 	if !reflect.DeepEqual(j1.entries, j.entries) {
 		t.Fatalf("entries differ after serialization")
+	}
+}
+
+func TestLoadSaveWithNoPersist(t *testing.T) {
+	// Create a cookie file so that we can verify
+	// that it's not read when NoPersist is set.
+	d, err := ioutil.TempDir("", "")
+	if err != nil {
+		t.Fatalf("cannot make temp dir: %v", err)
+	}
+	defer os.RemoveAll(d)
+	file := filepath.Join(d, "cookies")
+	j := newTestJar(file)
+	j.SetCookies(serializeTestURL, serializeTestCookies)
+	if err := j.Save(); err != nil {
+		t.Fatalf("cannot save: %v", err)
+	}
+	jar, err := New(&Options{
+		PublicSuffixList: testPSL{},
+		Filename:         file,
+		NoPersist:        true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := allCookiesIncludingExpired(jar, tNow); got != "" {
+		t.Errorf("Cookies unexpectedly loaded: %v", got)
+	}
+
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := jar.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file); err == nil {
+		t.Fatalf("file was unexpectedly saved")
 	}
 }
 

@@ -22,6 +22,9 @@ import (
 // Before the file is written, it reads any cookies that
 // have been stored from it and merges them into j.
 func (j *Jar) Save() error {
+	if j.filename == "" {
+		return nil
+	}
 	return j.save(time.Now())
 }
 
