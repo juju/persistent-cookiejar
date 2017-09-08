@@ -72,12 +72,18 @@ type Options struct {
 	// (useful for tests). If this is true, the value of Filename will be
 	// ignored.
 	NoPersist bool
+
+	IgnoreDiscard bool
+	IgnoreExpires bool
 }
 
 // Jar implements the http.CookieJar interface from the net/http package.
 type Jar struct {
 	// filename holds the file that the cookies were loaded from.
 	filename string
+
+	IgnoreDiscard bool
+	IgnoreExpires bool
 
 	psList PublicSuffixList
 
@@ -112,6 +118,8 @@ func newAtTime(o *Options, now time.Time) (*Jar, error) {
 		jar.psList = publicsuffix.List
 	}
 	if !o.NoPersist {
+		jar.IgnoreDiscard = o.IgnoreDiscard
+		jar.IgnoreExpires = o.IgnoreExpires
 		if jar.filename = o.Filename; jar.filename == "" {
 			jar.filename = DefaultCookieFile()
 		}
@@ -602,14 +610,18 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 		e.Persistent = true
 		e.Expires = now.Add(time.Duration(c.MaxAge) * time.Second)
 		if c.MaxAge < 0 {
+			if !c.Expires.After(now) {
+				e.Persistent = j.IgnoreExpires
+			}
 			return e, nil
 		}
 	} else if c.Expires.IsZero() {
+		e.Persistent = j.IgnoreDiscard
 		e.Expires = endOfTime
 	} else {
-		e.Persistent = true
 		e.Expires = c.Expires
 		if !c.Expires.After(now) {
+			e.Persistent = j.IgnoreExpires
 			return e, nil
 		}
 	}
