@@ -610,9 +610,7 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 		e.Persistent = true
 		e.Expires = now.Add(time.Duration(c.MaxAge) * time.Second)
 		if c.MaxAge < 0 {
-			if !c.Expires.After(now) {
-				e.Persistent = j.IgnoreExpires
-			}
+			e.Persistent = j.IgnoreExpires
 			return e, nil
 		}
 	} else if c.Expires.IsZero() {
@@ -620,8 +618,8 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 		e.Expires = endOfTime
 	} else {
 		e.Expires = c.Expires
+		e.Persistent = j.IgnoreExpires
 		if !c.Expires.After(now) {
-			e.Persistent = j.IgnoreExpires
 			return e, nil
 		}
 	}
