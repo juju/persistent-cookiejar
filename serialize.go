@@ -29,6 +29,16 @@ func (j *Jar) Save() error {
 	return j.save(time.Now())
 }
 
+// MarshalJSON implements json.Marshaler by encoding all persistent cookies
+// currently in the jar.
+func (j *Jar) MarshalJSON() ([]byte, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	// Marshaling entries can never fail.
+	data, _ := json.Marshal(j.allPersistentEntries())
+	return data, nil
+}
+
 // save is like Save but takes the current time as a parameter.
 func (j *Jar) save(now time.Time) error {
 	locked, err := lockFile(lockFileName(j.filename))
