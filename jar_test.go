@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -19,6 +18,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	qt "github.com/frankban/quicktest"
 )
 
 // tNow is the synthetic current time used as now during testing.
@@ -1480,7 +1481,7 @@ var serializeTestCookies = []*http.Cookie{{
 	Name:       "foo",
 	Value:      "bar",
 	Path:       "/p",
-	Domain:     "0.4.4.4",
+	Domain:     "example.com",
 	Expires:    time.Now(),
 	RawExpires: time.Now().Format(time.RFC3339Nano),
 	MaxAge:     99,
@@ -1490,27 +1491,43 @@ var serializeTestCookies = []*http.Cookie{{
 	Unparsed:   []string{"x", "y", "z"},
 }}
 
-var serializeTestURL, _ = url.Parse("http://0.1.2.3/x")
+var serializeTestURL, _ = url.Parse("http://example.com/x")
 
 func TestLoadSave(t *testing.T) {
+	c := qt.New(t)
 	d, err := ioutil.TempDir("", "")
-	if err != nil {
-		t.Fatalf("cannot make temp dir: %v", err)
-	}
+	c.Assert(err, qt.Equals, nil)
 	defer os.RemoveAll(d)
 	file := filepath.Join(d, "cookies")
 	j := newTestJar(file)
 	j.SetCookies(serializeTestURL, serializeTestCookies)
-	if err := j.Save(); err != nil {
-		t.Fatalf("cannot save: %v", err)
-	}
-	if _, err := os.Stat(file); err != nil {
-		t.Fatalf("file was not created")
-	}
+	err = j.Save()
+	c.Assert(err, qt.Equals, nil)
+	_, err = os.Stat(file)
+	c.Assert(err, qt.Equals, nil)
 	j1 := newTestJar(file)
-	if !reflect.DeepEqual(j1.entries, j.entries) {
-		t.Fatalf("entries differ after serialization")
-	}
+	c.Assert(len(j1.entries), qt.Equals, len(serializeTestCookies))
+	c.Assert(j1.entries, qt.DeepEquals, j.entries)
+}
+
+func TestMarshalJSON(t *testing.T) {
+	c := qt.New(t)
+	j := newTestJar("")
+	j.SetCookies(serializeTestURL, serializeTestCookies)
+	// Marshal the cookies.
+	data, err := j.MarshalJSON()
+	c.Assert(err, qt.Equals, nil)
+	// Save them to disk.
+	d, err := ioutil.TempDir("", "")
+	c.Assert(err, qt.Equals, nil)
+	defer os.RemoveAll(d)
+	file := filepath.Join(d, "cookies")
+	err = ioutil.WriteFile(file, data, 0600)
+	c.Assert(err, qt.Equals, nil)
+	// Load cookies from the file.
+	j1 := newTestJar(file)
+	c.Assert(len(j1.entries), qt.Equals, len(serializeTestCookies))
+	c.Assert(j1.entries, qt.DeepEquals, j.entries)
 }
 
 func TestLoadSaveWithNoPersist(t *testing.T) {
