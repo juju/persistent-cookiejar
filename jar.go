@@ -72,6 +72,13 @@ type Options struct {
 	// (useful for tests). If this is true, the value of Filename will be
 	// ignored.
 	NoPersist bool
+
+	// PersistSessionCookies to disk. By default, session cookies (i.e. those
+	// without a max-age or expiry time) are only stored in-memory. If true,
+	// this flag allows session cookies to be loaded from and stored to disk.
+	// If a file containing session cookies is loaded and this flag is false,
+	// those cookies will be ignored.
+	PersistSessionCookies bool
 }
 
 // Jar implements the http.CookieJar interface from the net/http package.
@@ -87,6 +94,13 @@ type Jar struct {
 	// entries is a set of entries, keyed by their eTLD+1 and subkeyed by
 	// their name/domain/path.
 	entries map[string]map[string]entry
+
+	// persistSessionCookies to disk. By default, session cookies (i.e. those
+	// without a max-age or expiry time) are only stored in-memory. If true,
+	// this flag allows session cookies to be loaded from and stored to disk.
+	// If a file containing session cookies is loaded and this flag is false,
+	// those cookies will be ignored.
+	persistSessionCookies bool
 }
 
 var noOptions Options
@@ -108,6 +122,7 @@ func newAtTime(o *Options, now time.Time) (*Jar, error) {
 	if o == nil {
 		o = &noOptions
 	}
+	jar.persistSessionCookies = o.PersistSessionCookies
 	if jar.psList = o.PublicSuffixList; jar.psList == nil {
 		jar.psList = publicsuffix.List
 	}
@@ -367,6 +382,9 @@ func (j *Jar) RemoveCookie(c *http.Cookie) {
 func (j *Jar) merge(entries []entry) {
 	for _, e := range entries {
 		if e.CanonicalHost == "" {
+			continue
+		}
+		if !j.persistSessionCookies && !e.Persistent {
 			continue
 		}
 		key := jarKey(e.CanonicalHost, j.psList)

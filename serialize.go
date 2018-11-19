@@ -35,7 +35,7 @@ func (j *Jar) MarshalJSON() ([]byte, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	// Marshaling entries can never fail.
-	data, _ := json.Marshal(j.allPersistentEntries())
+	data, _ := json.Marshal(j.allEntriesToPersist())
 	return data, nil
 }
 
@@ -124,20 +124,20 @@ func (j *Jar) mergeFrom(r io.Reader) error {
 // as a JSON array.
 func (j *Jar) writeTo(w io.Writer) error {
 	encoder := json.NewEncoder(w)
-	entries := j.allPersistentEntries()
+	entries := j.allEntriesToPersist()
 	if err := encoder.Encode(entries); err != nil {
 		return err
 	}
 	return nil
 }
 
-// allPersistentEntries returns all the entries in the jar, sorted by primarly by canonical host
+// allEntriesToPersist returns all the entries in the jar, sorted by primarly by canonical host
 // name and secondarily by path length.
-func (j *Jar) allPersistentEntries() []entry {
+func (j *Jar) allEntriesToPersist() []entry {
 	var entries []entry
 	for _, submap := range j.entries {
 		for _, e := range submap {
-			if e.Persistent {
+			if j.persistSessionCookies || e.Persistent {
 				entries = append(entries, e)
 			}
 		}
