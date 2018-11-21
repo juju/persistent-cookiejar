@@ -220,6 +220,10 @@ func (e *entry) pathMatch(requestPath string) bool {
 	return false
 }
 
+func (e *entry) isExpiredAfter(t time.Time) bool {
+	return !e.Expires.IsZero() && t.After(e.Expires)
+}
+
 // hasDotSuffix reports whether s ends in "."+suffix.
 func hasDotSuffix(s, suffix string) bool {
 	return len(s) > len(suffix) && s[len(s)-len(suffix)-1] == '.' && s[len(s)-len(suffix):] == suffix
@@ -296,7 +300,7 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 
 	var selected []entry
 	for id, e := range submap {
-		if !e.Expires.After(now) {
+		if e.isExpiredAfter(now) {
 			// Save some space by deleting the value when the cookie
 			// expires. We can't delete the cookie itself because then
 			// we wouldn't know that the cookie had expired when
@@ -338,7 +342,7 @@ func (j *Jar) allCookies(now time.Time) []*http.Cookie {
 	defer j.mu.Unlock()
 	for _, submap := range j.entries {
 		for _, e := range submap {
-			if !e.Expires.After(now) {
+			if e.isExpiredAfter(now) {
 				// Do not return expired cookies.
 				continue
 			}
@@ -410,7 +414,7 @@ var expiryRemovalDuration = 24 * time.Hour
 func (j *Jar) deleteExpired(now time.Time) {
 	for tld, submap := range j.entries {
 		for id, e := range submap {
-			if !e.Expires.After(now) && !e.Updated.Add(expiryRemovalDuration).After(now) {
+			if e.isExpiredAfter(now) && !e.Updated.Add(expiryRemovalDuration).After(now) {
 				delete(submap, id)
 			}
 		}
@@ -600,13 +604,15 @@ func (cff CookieFilterFunc) IsPersistent(c *http.Cookie) bool {
 	return cff(c)
 }
 
-// Well-known FilterFuncs
 var (
+	// DefaultFilter is the previous behavior which does not persist session
+	// cookies.
 	DefaultFilter = CookieFilterFunc(func(c *http.Cookie) bool {
 		return c.MaxAge != 0 || !c.Expires.IsZero()
 	})
 
-	AnyFilter = CookieFilterFunc(func(c *http.Cookie) bool {
+	// AllowAllFilter does not check any cookie properties before persisting.
+	AllowAllFilter = CookieFilterFunc(func(_ *http.Cookie) bool {
 		return true
 	})
 )
@@ -641,11 +647,9 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 		if c.MaxAge < 0 {
 			return e, nil
 		}
-	} else if c.Expires.IsZero() {
-		e.Expires = endOfTime
 	} else {
 		e.Expires = c.Expires
-		if !c.Expires.After(now) {
+		if e.isExpiredAfter(now) {
 			return e, nil
 		}
 	}

@@ -1812,7 +1812,7 @@ func allCookies(jar *Jar, now time.Time) string {
 	var cs []string
 	for _, submap := range jar.entries {
 		for _, cookie := range submap {
-			if !cookie.Expires.After(now) {
+			if !cookie.Expires.IsZero() && now.After(cookie.Expires) {
 				continue
 			}
 			cs = append(cs, cookie.Name+"="+cookie.Value)
@@ -2071,7 +2071,6 @@ func TestRemoveAllHostIP(t *testing.T) {
 func TestFilter(t *testing.T) {
 	j := newTestJar("")
 
-	j.filter = AnyFilter
 	google := mustParseURL("https://www.google.com")
 
 	j.SetCookies(
@@ -2083,26 +2082,58 @@ func TestFilter(t *testing.T) {
 				Expires: time.Now().Add(24 * time.Hour),
 			},
 			&http.Cookie{
-				Name:    "test-cookie2",
-				Value:   "test-value",
-				Expires: time.Now().Add(-24 * time.Hour),
+				Name:  "test-cookie2",
+				Value: "test-value",
 			},
 		},
 	)
 
+	es, err := jsonRoundTrip(j)
+	if err != nil {
+		t.Fatalf("json failed: %v", err)
+	}
+
+	if len(es) != 1 {
+		t.Errorf("expected only one entry, got %d", len(es))
+	}
+
+	j.filter = CookieFilterFunc(func(_ *http.Cookie) bool {
+		return false
+	})
+
+	es, err = jsonRoundTrip(j)
+	if err != nil {
+		t.Fatalf("json failed: %v", err)
+	}
+
+	if len(es) > 0 {
+		t.Errorf("expected zero entries")
+	}
+
+	j.filter = AllowAllFilter
+
+	es, err = jsonRoundTrip(j)
+	if err != nil {
+		t.Fatalf("json failed: %v", err)
+	}
+
+	if len(es) < 2 {
+		t.Errorf("got fewer than two entries with AllowAllFilter")
+	}
+}
+
+func jsonRoundTrip(j *Jar) ([]entry, error) {
 	bs, err := j.MarshalJSON()
 	if err != nil {
-		t.Errorf("error marshaling json")
+		return nil, err
 	}
 
 	var es []entry
 	if json.Unmarshal(bs, &es) != nil {
-		t.Errorf("error remarshaling")
+		return nil, err
 	}
 
-	if len(es) < 2 {
-		t.Errorf("fewer than two entries were marshaled")
-	}
+	return es, nil
 }
 
 func testRemoveAllHost(t *testing.T, setURL *url.URL, removeHost string, shouldRemove bool) {
