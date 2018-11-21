@@ -138,7 +138,16 @@ func (j *Jar) allPersistentEntries() []entry {
 	var entries []entry
 	for _, submap := range j.entries {
 		for _, e := range submap {
-			if j.filter.IsPersistent(&http.Cookie{Name: e.Name, Value: e.Value}) {
+			if j.filter.IsPersistent(&http.Cookie{
+				Domain:   e.Domain,
+				Expires:  e.Expires,
+				HttpOnly: e.HttpOnly,
+				MaxAge:   e.MaxAge,
+				Name:     e.Name,
+				Path:     e.Path,
+				Secure:   e.Secure,
+				Value:    e.Value,
+			}) {
 				entries = append(entries, e)
 			}
 		}

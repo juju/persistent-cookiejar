@@ -5,6 +5,7 @@
 package cookiejar
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -2065,6 +2066,43 @@ func TestRemoveAllHostWithPort(t *testing.T) {
 
 func TestRemoveAllHostIP(t *testing.T) {
 	testRemoveAllHost(t, mustParseURL("https://10.1.1.1"), "10.1.1.1", true)
+}
+
+func TestFilter(t *testing.T) {
+	j := newTestJar("")
+
+	j.filter = AnyFilter
+	google := mustParseURL("https://www.google.com")
+
+	j.SetCookies(
+		google,
+		[]*http.Cookie{
+			&http.Cookie{
+				Name:    "test-cookie",
+				Value:   "test-value",
+				Expires: time.Now().Add(24 * time.Hour),
+			},
+			&http.Cookie{
+				Name:    "test-cookie2",
+				Value:   "test-value",
+				Expires: time.Now().Add(-24 * time.Hour),
+			},
+		},
+	)
+
+	bs, err := j.MarshalJSON()
+	if err != nil {
+		t.Errorf("error marshaling json")
+	}
+
+	var es []entry
+	if json.Unmarshal(bs, &es) != nil {
+		t.Errorf("error remarshaling")
+	}
+
+	if len(es) < 2 {
+		t.Errorf("fewer than two entries were marshaled")
+	}
 }
 
 func testRemoveAllHost(t *testing.T, setURL *url.URL, removeHost string, shouldRemove bool) {

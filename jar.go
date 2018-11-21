@@ -164,6 +164,7 @@ type entry struct {
 	HostOnly   bool
 	Expires    time.Time
 	Creation   time.Time
+	MaxAge     int
 	LastAccess time.Time
 
 	// Updated records when the cookie was updated.
@@ -271,11 +272,11 @@ func (j *Jar) Cookies(u *url.URL) (cookies []*http.Cookie) {
 // cookies is like Cookies but takes the current time as a parameter.
 func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return
+		return cookies
 	}
 	host, err := canonicalHost(u.Host)
 	if err != nil {
-		return
+		return cookies
 	}
 	key := jarKey(host, j.psList)
 
@@ -284,7 +285,7 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 
 	submap := j.entries[key]
 	if submap == nil {
-		return
+		return cookies
 	}
 
 	https := u.Scheme == "https"
@@ -604,6 +605,7 @@ var (
 	DefaultFilter = CookieFilterFunc(func(c *http.Cookie) bool {
 		return c.MaxAge == 0 && !c.Expires.IsZero()
 	})
+
 	AnyFilter = CookieFilterFunc(func(c *http.Cookie) bool {
 		return true
 	})
@@ -621,6 +623,7 @@ var (
 // A malformed c.Domain will result in an error.
 func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e entry, err error) {
 	e.Name = c.Name
+	e.MaxAge = c.MaxAge
 	if c.Path == "" || c.Path[0] != '/' {
 		e.Path = defPath
 	} else {
