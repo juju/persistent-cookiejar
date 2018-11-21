@@ -72,6 +72,15 @@ type Options struct {
 	// (useful for tests). If this is true, the value of Filename will be
 	// ignored.
 	NoPersist bool
+
+	// Filter specifies the filter to be used when deciding whether each cookie
+	// should be persisted to the filesystem.
+	Filter CookieFilter
+}
+
+// CookieFilter is a type for deciding whether a Cookie should be persisted
+type CookieFilter interface {
+	IsPersistent(*http.Cookie) bool
 }
 
 // Jar implements the http.CookieJar interface from the net/http package.
@@ -87,6 +96,9 @@ type Jar struct {
 	// entries is a set of entries, keyed by their eTLD+1 and subkeyed by
 	// their name/domain/path.
 	entries map[string]map[string]entry
+
+	// Filter from Options
+	filter CookieFilter
 }
 
 var noOptions Options
@@ -108,6 +120,11 @@ func newAtTime(o *Options, now time.Time) (*Jar, error) {
 	if o == nil {
 		o = &noOptions
 	}
+	jar.filter = DefaultFilter
+	if o.Filter != nil {
+		jar.filter = o.Filter
+	}
+
 	if jar.psList = o.PublicSuffixList; jar.psList == nil {
 		jar.psList = publicsuffix.List
 	}
@@ -144,7 +161,6 @@ type entry struct {
 	Path       string
 	Secure     bool
 	HttpOnly   bool
-	Persistent bool
 	HostOnly   bool
 	Expires    time.Time
 	Creation   time.Time
@@ -255,11 +271,11 @@ func (j *Jar) Cookies(u *url.URL) (cookies []*http.Cookie) {
 // cookies is like Cookies but takes the current time as a parameter.
 func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return cookies
+		return
 	}
 	host, err := canonicalHost(u.Host)
 	if err != nil {
-		return cookies
+		return
 	}
 	key := jarKey(host, j.psList)
 
@@ -268,7 +284,7 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 
 	submap := j.entries[key]
 	if submap == nil {
-		return cookies
+		return
 	}
 
 	https := u.Scheme == "https"
@@ -310,7 +326,7 @@ func (j *Jar) cookies(u *url.URL, now time.Time) (cookies []*http.Cookie) {
 // have Domain, Expires, HttpOnly, Name, Secure, Path, and Value filled
 // out. Expired cookies will not be returned. This function does not
 // modify the cookie jar.
-func (j *Jar) AllCookies() (cookies []*http.Cookie) {
+func (j *Jar) AllCookies() []*http.Cookie {
 	return j.allCookies(time.Now())
 }
 
@@ -575,6 +591,24 @@ func defaultPath(path string) string {
 	return path[:i] // Path is either of form "/abc/xyz" or "/abc/xyz/".
 }
 
+// CookieFilterFunc implements CookieFilter by calling the underlying func
+type CookieFilterFunc func(*http.Cookie) bool
+
+// IsPersistent implements CookieFilter for arbitrary funcs
+func (cff CookieFilterFunc) IsPersistent(c *http.Cookie) bool {
+	return cff(c)
+}
+
+// Well-known FilterFuncs
+var (
+	DefaultFilter = CookieFilterFunc(func(c *http.Cookie) bool {
+		return c.MaxAge == 0 && !c.Expires.IsZero()
+	})
+	AnyFilter = CookieFilterFunc(func(c *http.Cookie) bool {
+		return true
+	})
+)
+
 // newEntry creates an entry from a http.Cookie c. now is the current
 // time and is compared to c.Expires to determine deletion of c. defPath
 // and host are the default-path and the canonical host name of the URL
@@ -597,9 +631,9 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 	if err != nil {
 		return e, err
 	}
+
 	// MaxAge takes precedence over Expires.
 	if c.MaxAge != 0 {
-		e.Persistent = true
 		e.Expires = now.Add(time.Duration(c.MaxAge) * time.Second)
 		if c.MaxAge < 0 {
 			return e, nil
@@ -607,7 +641,6 @@ func (j *Jar) newEntry(c *http.Cookie, now time.Time, defPath, host string) (e e
 	} else if c.Expires.IsZero() {
 		e.Expires = endOfTime
 	} else {
-		e.Persistent = true
 		e.Expires = c.Expires
 		if !c.Expires.After(now) {
 			return e, nil

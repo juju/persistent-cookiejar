@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -137,7 +138,7 @@ func (j *Jar) allPersistentEntries() []entry {
 	var entries []entry
 	for _, submap := range j.entries {
 		for _, e := range submap {
-			if e.Persistent {
+			if j.filter.IsPersistent(&http.Cookie{Name: e.Name, Value: e.Value}) {
 				entries = append(entries, e)
 			}
 		}
