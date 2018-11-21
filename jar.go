@@ -603,7 +603,7 @@ func (cff CookieFilterFunc) IsPersistent(c *http.Cookie) bool {
 // Well-known FilterFuncs
 var (
 	DefaultFilter = CookieFilterFunc(func(c *http.Cookie) bool {
-		return c.MaxAge == 0 && !c.Expires.IsZero()
+		return c.MaxAge != 0 || !c.Expires.IsZero()
 	})
 
 	AnyFilter = CookieFilterFunc(func(c *http.Cookie) bool {
